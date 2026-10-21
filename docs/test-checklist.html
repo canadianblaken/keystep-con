@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KSCON Test Checklist</title>
+<style>
+:root{--bg:#141416;--fg:#ececef;--muted:#a1a1aa;--card:#1e1e22;--line:#33333a;--accent:#6fa8ff;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24}
+@media (prefers-color-scheme: light){:root:not([data-theme="dark"]){--bg:#f4f3ef;--fg:#1d1d1f;--muted:#5b5b60;--card:#fff;--line:#d9d7d0;--accent:#2f6fd6;--ok:#15803d;--bad:#b91c1c;--warn:#b45309}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,-apple-system,sans-serif;padding:20px 16px 60px}
+main{max-width:860px;margin:0 auto}
+h1{font-size:21px;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 14px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:0 0 16px;position:sticky;top:0;background:var(--bg);padding:8px 0;z-index:2}
+.bar button{font:inherit;font-size:13px;padding:6px 12px;border-radius:8px;border:1px solid var(--line);background:var(--card);color:var(--fg);cursor:pointer}
+.bar .count{color:var(--muted);font-size:13px;margin-left:auto}
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:0 0 14px}
+section h2{font-size:16px;margin:0 0 2px}
+section p.pre{color:var(--muted);font-size:13px;margin:0 0 8px}
+.item{border-top:1px solid var(--line);padding:9px 0;display:grid;grid-template-columns:1fr auto;gap:6px 12px;align-items:start}
+.item:first-of-type{border-top:0}
+.item .t{font-weight:600}
+.item .how{color:var(--muted);font-size:13.5px;margin-top:2px}
+.item .how b{color:var(--fg);font-weight:600}
+.res{display:flex;gap:4px}
+.res button{font:inherit;font-size:12.5px;padding:4px 9px;border-radius:7px;border:1px solid var(--line);background:var(--bg);color:var(--fg);cursor:pointer}
+.res button[aria-pressed="true"][data-v="ok"]{background:var(--ok);border-color:var(--ok);color:#111}
+.res button[aria-pressed="true"][data-v="bad"]{background:var(--bad);border-color:var(--bad);color:#111}
+.res button[aria-pressed="true"][data-v="skip"]{background:var(--muted);border-color:var(--muted);color:#111}
+.item textarea{grid-column:1/-1;font:inherit;font-size:13px;width:100%;min-height:2.2em;border-radius:7px;border:1px solid var(--line);background:var(--bg);color:var(--fg);padding:5px 8px;display:none}
+.item.bad textarea,.item.note textarea{display:block}
+@media (max-width:560px){.item{grid-template-columns:1fr}}
+.done{color:var(--ok);font-size:13px}
+code{font:12.5px ui-monospace,monospace}
+</style>
+</head>
+<body>
+<main>
+<h1>KSCON hardware test checklist</h1>
+<p class="sub">Firmware build 4 (<code>KSCON_2.5.99_build4.kspf</code>: everything in build 3 plus Make bass) and the KeyStep Con page (<code>web/keystep-interactive-manual.html</code>), from this repo. Mark each item Works, Problem or Skip; a Problem opens a box for what you saw. When done, press <b>Copy results</b> and paste them into an issue. Your marks stay in this browser.</p>
+<div class="bar"><button id="copy">Copy results</button><button id="reset">Clear all marks</button><span class="count" id="count"></span></div>
+<div id="list"></div>
+</main>
+<script>
+"use strict";
+const T=[
+ ["Before you start","Flash build 4 with MCC, then power the KeyStep off and on. Use project 16 for anything that writes; the others stay untouched.",[
+  ["Startup screen","The screen at power-on shows <b>KEYSTEP CON</b> and the moving dots."],
+  ["Firmware page","Shift + Project > Utility > FW version shows <b>KSCON 2.5.99 b4</b> and <b>based on 2.5.20</b>."],
+  ["MCC sees it","MCC connects and shows 2.5.99, and can still recall a project (don't store from MCC)."]]],
+ ["KeyStep Con page: connection","Open web/keystep-interactive-manual.html in Chrome.",[
+  ["One-click connect","Click <b>Connect KeyStep</b>: the button turns into <b>KeyStep Pro · KSCON 2.5.99 b4</b>."],
+  ["Firmware card","Device settings > Firmware says <b>Running: 2.5.99 — KSCON build 4</b>."],
+  ["MIDI monitor","Device settings > MIDI monitor > Start, then play a few keys on the KeyStep: each shows as note on / note off with its channel."]]],
+ ["Pads on the KeyStep","Watch the MIDI monitor while you do these; it shows exactly what each step sends.",[
+  ["Drum pads","Hold <b>Drum</b> (track 1), press <b>Seq</b>. Select track 2. Steps 1–16 play drum lanes 1–16 on the drum channel while held; keys still play track 2."],
+  ["Chord pads: scale chords","Hold <b>Seq</b> on track 2, press <b>Arp</b>. Empty steps play chords of track 2's scale (1–8 triads, 9–16 sevenths), in the keyboard's lowest octave, on track 2's channel."],
+  ["Chord pads: keep a chord","Select track 2, hold a chord on the keys and tap step 3. Let go; step 3 now plays that chord."],
+  ["Chord pads: erase and undo","Hold <b>Erase</b> and press step 3: back to the scale chord. <b>Shift + Exit</b>: the kept chord is back. Again: gone again."],
+  ["Chord pads: saved","Keep a chord on a pad, Save Project (Project menu), power off and on, load the project, turn chord pads on: the chord is still there."],
+  ["Key lights","With track 2 selected, chord pads light the keys of the notes they play in the track colour; drum pads light the lane keys while track 1 shows drums."],
+  ["Recording","Rec + Play on track 2 with chord pads on: tap steps, stop, play back. The chords were recorded, and longer holds made longer notes."],
+  ["Drum recording","Track 1 in Drum mode, drum pads on, Rec + Play: tap steps; the hits land in the drum lanes."],
+  ["Root chords","Hold <b>Seq</b> on track 2, press <b>Mute</b>. A key on track 2 is silent and sets the root; steps play the 16 chord types on it (still working as in build 2)."],
+  ["Stock combos still stock","<b>Shift + Control</b> still toggles Control mode; <b>Shift + Drum</b> still unmutes all drums; Seq, Arp and Mute alone behave as usual."]]],
+ ["KeyStep Con page: editing project 16","In Projects, select slot 16 and Recall. After each change, <b>Store to slot 16</b> (two clicks), then check on the KeyStep.",[
+  ["Piano roll","Track 2 tab: add a few notes on pattern 1, Store, play project 16: they play as drawn."],
+  ["Drum grid + Steps → drums","Track 1 tab in Drum mode: Steps → drums from track 2 pattern 1, Store: track 1 plays them as drums."],
+  ["Project tab","Change the tempo, give track 2 a chord with Chord mode on, change a note of User scale 1, Store: all three show up on the KeyStep."],
+  ["Scenes","Scenes tab: make scene 2 chain track 2 patterns 1 and 2, Store, load scene 2 on the KeyStep: the chain plays."],
+  ["MIDI import","Track 2 > Import / export MIDI: import a short .mid to track 3, Store, play: it sounds like the file."],
+  ["Control track (new decode)","Control tab, pattern 1: set Knob 1 CC to 74, drag a ramp on steps 1–16, Store. On the KeyStep, load project 16, press <b>Control</b> and Play, with the MIDI monitor running: you should see CC 74 stepping through your values. Note which channel and values appear."],
+  ["Undo","Make an edit, Ctrl+Z: it's gone; Ctrl+Shift+Z: back."],
+  ["Make bass (page)","Track 3 tab: <b>Make bass…</b>, from track 1 pattern 1, click each style (Root, Root + 5th, Octaves, Pulse, Follow rhythm), then Store: track 3 plays the last one as a bass line under track 1."]]],
+ ["Settings and library","",[
+  ["Device settings write","Change Brightness (Not in MCC): the KeyStep's screen brightness changes, and the page says it was set."],
+  ["Library","Save to library, open another slot, then load it back from My library: same project."],
+  ["Backup (optional, ~10 min)","Back up or restore all 16 > Back up all 16: a file downloads with 16 projects."]]],
+ ["Make bass on the KeyStep (new in build 4)","Project 16. Record a few chords on track 1 pattern 1 (a different chord every 4 steps is easiest). Give track 3 a bass sound on its MIDI channel. Watch the MIDI monitor for track 3.",[
+  ["Make it","Hold <b>Seq</b> on track 3, press track 1's <b>Track</b> button: the screen says <b>Bass: Root / from track 1</b>, and track 3's pattern shows one note per chord change (C2–B2)."],
+  ["Switch styles","Still holding track 3's Seq, press steps <b>1–5</b>: Root, Root + 5th, Octaves, Pulse, Follow. Each one names itself on the screen and track 3 changes to it."],
+  ["While playing","Press Play and switch styles while it runs: the bass changes on the fly and no note hangs (MIDI monitor: every note on has its note off)."],
+  ["Steps afterwards","Let go of Seq: steps do what they did before (pads, step editing), not bass styles."],
+  ["Style remembered","Hold Seq on track 3 and press track 1's Track again: it uses the last style you picked."],
+  ["Same row stays stock","Hold Seq on track 3 and press track 3's own Track button: it behaves as stock."],
+  ["Saved","Save Project, power off and on, load project 16: the bass pattern is still there."],
+  ["Drum mode refused","Put track 1 in Drum mode and try it: the screen says <b>Bass: not with drum mode on track 1</b> and track 3 is unchanged."]]],
+];
+const KEY="kscon.checklist.v1";let st={};try{st=JSON.parse(localStorage.getItem(KEY)||"{}")}catch(e){}
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(st))}catch(e){}count()};
+const list=document.getElementById("list");
+T.forEach(([sec,pre,items],si)=>{const s=document.createElement("section");s.innerHTML=`<h2>${sec}</h2>${pre?`<p class="pre">${pre}</p>`:""}`;
+ items.forEach(([t,how],ii)=>{const id=`${si}.${ii}`,cur=st[id]||{};const it=document.createElement("div");it.className="item"+(cur.v==="bad"?" bad":cur.n?" note":"");
+  it.innerHTML=`<div><div class="t">${t}</div><div class="how">${how}</div></div><div class="res" role="group" aria-label="${t}">${[["ok","Works"],["bad","Problem"],["skip","Skip"]].map(([v,l])=>`<button data-v="${v}" aria-pressed="${cur.v===v}">${l}</button>`).join("")}</div><textarea placeholder="What happened?" aria-label="Notes for ${t}"></textarea>`;
+  const ta=it.querySelector("textarea");ta.value=cur.n||"";ta.oninput=()=>{st[id]={...st[id],n:ta.value};save()};
+  it.querySelectorAll("[data-v]").forEach(b=>b.onclick=()=>{const v=st[id]&&st[id].v===b.dataset.v?null:b.dataset.v;st[id]={...st[id],v};it.querySelectorAll("[data-v]").forEach(x=>x.setAttribute("aria-pressed",x.dataset.v===v));it.classList.toggle("bad",v==="bad");if(v==="bad")ta.focus();save()});
+  s.appendChild(it)});list.appendChild(s)});
+function count(){let n=0,ok=0,bad=0,all=0;T.forEach(([,, items],si)=>items.forEach((_,ii)=>{all++;const v=(st[`${si}.${ii}`]||{}).v;if(v)n++;if(v==="ok")ok++;if(v==="bad")bad++}));
+ document.getElementById("count").textContent=`${n} of ${all} marked · ${ok} work · ${bad} problem${bad===1?"":"s"}`}
+count();
+document.getElementById("copy").onclick=async()=>{const out=["KSCON test results (build 4)"];T.forEach(([sec,,items],si)=>{out.push("",sec);items.forEach(([t],ii)=>{const c=st[`${si}.${ii}`]||{};out.push(`- ${t}: ${c.v==="ok"?"works":c.v==="bad"?"PROBLEM":c.v==="skip"?"skipped":"not tested"}${c.n?" — "+c.n:""}`)})});
+ const txt=out.join("\n");try{await navigator.clipboard.writeText(txt);document.getElementById("copy").textContent="Copied"}catch(e){const w=window.open("","_blank");if(w)w.document.body.innerText=txt}setTimeout(()=>document.getElementById("copy").textContent="Copy results",1500)};
+document.getElementById("reset").onclick=e=>{if(e.target.dataset.arm){st={};save();location.reload();return}e.target.dataset.arm=1;e.target.textContent="Click again to clear";setTimeout(()=>{delete e.target.dataset.arm;e.target.textContent="Clear all marks"},3000)};
+</script>
+</body>
+</html>

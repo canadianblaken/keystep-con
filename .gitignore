@@ -1,0 +1,17 @@
+# Arturia-copyrighted material and derived dumps: keep local, never commit
+firmware/
+mcc/KeyStepPro.json
+mcc/KeyStepPro.ui
+mcc/KeyStepPro.png
+ghidra/proj/
+out/*decomp.c
+out/*functions.tsv
+out/*strings.tsv
+out/*strings_raw.txt
+out/*.log
+manual/
+out/
+local/
+.venv/
+__pycache__/
+.DS_Store

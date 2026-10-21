@@ -1,0 +1,80 @@
+# KeyStep Con (KSCON)
+
+Unofficial firmware patch, editor and playable manual for the **Arturia KeyStep Pro**.
+
+KSCON patches Arturia's KeyStep Pro firmware 2.5.20 and adds features to the device itself: project names, drum pads and chord pads on the step buttons, root chords, and an on-device bass generator. The **KeyStep Con page** is a single HTML file that runs in Chrome. It edits projects over USB in place of MIDI Control Center (MCC), and it doubles as a playable manual.
+
+Not affiliated with or endorsed by Arturia. This repo has no Arturia firmware in it. You build the patch from your own copy of the official 2.5.20 update.
+
+![Startup screen](docs/screenshots/startup-screen.png)
+
+## On the KeyStep (firmware patch)
+
+| Feature | How |
+|---|---|
+| **Make bass** | Hold **Seq** on the bass track and press the **Track** button of the track with the chords. The bass track's current pattern becomes a bass line (C2–B2) that follows the chords. Keep holding Seq and press steps **1–5** to pick the style: Root, Root + 5th, Octaves, Pulse or Follow rhythm. The screen names the style, and the style is remembered. It works while playing. |
+| **Drum pads** | Hold **Drum** and press **Seq**. Steps 1–16 play drum lanes 1–16 on the drum channel while another track plays on the keys. |
+| **Chord pads** | Hold **Seq** on track 2–4 and press **Arp**. Empty steps play chords of the track's scale. Hold a chord on the keys and tap a step to keep it on that step. **Erase** + step clears it, and **Shift + Exit** undoes or redoes. Kept chords are saved with the project. |
+| **Root chords** | Hold **Seq** and press **Mute** on a track. A key on that track silently sets the root, and steps 1–16 play 16 chord types on it (triads, sus, 6ths, 7ths, 9ths, inversions…). |
+| **Key lights, recording** | Pad notes light the keys they play and are recorded like key presses, including drum hits. |
+| **Project names** | Projects can have a 16-character name instead of "Project N". Names are set over SysEx (page or `tools/set_project_name.py`), survive power cycles and are cleared by Erase Project. |
+| **Startup screen, version** | The startup screen shows KEYSTEP CON. The device reports **2.5.99**, and Utility > FW version shows "KSCON 2.5.99 bN / based on 2.5.20". |
+
+Stock combos stay stock: Shift + Control, Shift + Drum, and Seq, Arp and Mute pressed on their own.
+
+## The KeyStep Con page (`web/`)
+
+`web/keystep-interactive-manual.html` is one self-contained file. Open it in Chrome or Edge and click **Connect KeyStep** (Web MIDI with SysEx). Without a KeyStep connected, it runs against a built-in simulated KeyStep Pro.
+
+- **Projects**: recall any of the 16 slots, edit tracks in a piano roll and drums in a grid, and edit scenes, project settings and the control track. Undo works, and Store writes back with a confirm. Projects can be saved to a library in the browser or to a file, and all 16 can be backed up and restored.
+- **Make bass** on the page: the same five styles as the firmware, written into any pattern and undoable.
+- **MIDI import/export**: turn .mid files into patterns, or export patterns as .mid.
+- **Device settings**: all 158 global settings in MCC's groups, including the ones MCC hides. Also a MIDI monitor and a firmware card.
+- **Manual**: a playable KeyStep Pro with help on every control, the manual's chapters and guided tours.
+- **Synth CC**: map a synth's CCs (from the MIDI Guide catalogue) to the five knobs.
+
+![Make bass on the page](docs/screenshots/make-bass-page.png)
+
+| | |
+|---|---|
+| ![Track editor](docs/screenshots/track-editor.png) | ![Device settings](docs/screenshots/device-settings.png) |
+| ![Playable manual](docs/screenshots/manual.png) | |
+
+## Building the firmware
+
+Needs Python 3.10+, `clang` with an ARM target (Apple clang or LLVM), and `unicorn` and `capstone` for the tests (`pip install -r requirements.txt`).
+
+1. Get the official update file `keystep-pro_Firmware_Update_2.5.20.0.kspf`. MIDI Control Center keeps a copy in `/Library/Arturia/MIDI Control Center/` on macOS. Put it in `firmware/`, which git ignores.
+2. Run `scripts/build-firmware.sh`. It builds `firmware/patched/KSCON_2.5.99_build<N>.kspf` and runs both emulator suites:
+   - `tools/test_pad_hooks.py` runs the hooks on the real firmware code in Unicorn, with every firmware call stubbed and checked.
+   - `tools/test_names_hooks.py` checks the project-name hooks the same way.
+   - The bass test also runs the page's `makeBass` in node and checks that the firmware writes the same notes.
+3. Flash the `.kspf` with MIDI Control Center the same way as an official update. To go back, flash Arturia's 2.5.20 file again. MCC may treat this as a downgrade from 2.5.99.
+
+The tests run the patch in an emulator. Every feature listed above has also been checked on a real KeyStep Pro (`docs/test-checklist.html` is the checklist used). Back up your projects before flashing anything. Use at your own risk.
+
+| File | What it is |
+|---|---|
+| `tools/pad_hooks.S` | pads, root chords, key lights, recording and the Make bass button combo (Thumb-2 assembly) |
+| `tools/bass_gen.c` | the bass generator, compiled into the hook block (no linker, no relocations) |
+| `tools/name_hooks.S` | project names: SysEx setter and title display |
+| `tools/boot_logo.py` | redraws the display chip's startup picture (`--preview out.png`) |
+| `tools/build_ksp_patch.py` | assembles everything, redirects the stock calls, sets the version, fixes checksums and writes the `.kspf` |
+| `tools/kspemu.py`, `tools/ksp_link.py` | the firmware's SysEx parser and project storage, emulated, plus a CoreMIDI link (macOS) |
+| `tools/set_project_name.py`, `tools/ksp_setlist.py`, `tools/ksp_get.py`, `tools/readchord.sh` | device tools: names, set lists (names, chords, keys), read-only GETs |
+| `tools/mkelf.py`, `tools/mkelf_data.py`, `ghidra/scripts/` | turn the raw image into an ELF and run Ghidra headless |
+| `findings.md` | everything worked out about the firmware: SysEx protocol, globals, storage, sequencer RAM layout, UI popups, the hooks, and hardware results |
+| `mcc-params.md` | MCC's parameter table with SysEx IDs |
+
+## Building the page
+
+```
+cd web && ./build.sh                     # joins src/ into keystep-interactive-manual.html
+scripts/test-web.sh                      # three headless-Chrome suites against the simulated KeyStep
+```
+
+Set `CHROME` to the Chrome binary if it is not on the path. Day-to-day development of the page happens in [playable-gear-manuals](https://github.com/canadianblaken/playable-gear-manuals) (`keystep/`), and `web/` is a copy of it.
+
+## Credits and licence
+
+KSCON's own code and notes are MIT licensed (see `LICENSE`). KeyStep Pro, MIDI Control Center and Arturia are Arturia's trademarks. The firmware is Arturia's and is not included here. The Synth CC catalogue comes from the [MIDI Guide](https://midi.guide) (CC BY-SA 4.0).
