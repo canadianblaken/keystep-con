@@ -129,6 +129,10 @@ scripts/test-web.sh                      # three headless-Chrome suites against 
 
 Set `CHROME` to the Chrome binary if it is not on the path. Day-to-day development of the page happens in [playable-gear-manuals](https://github.com/canadianblaken/playable-gear-manuals) (`keystep/`), and `web/` is a copy of it.
 
+## Support
+
+KeyStep Con is free. If it helps you, you can leave a tip on [Ko-fi](https://ko-fi.com/canadianblaken).
+
 ## Credits and licence
 
 KSCON's own code and notes are MIT licensed (see `LICENSE`). KeyStep Pro, MIDI Control Center and Arturia are Arturia's trademarks. The firmware is Arturia's and is not included here. The Synth CC catalogue comes from the [MIDI Guide](https://midi.guide) (CC BY-SA 4.0).
