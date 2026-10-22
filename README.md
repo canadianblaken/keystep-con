@@ -40,7 +40,19 @@ Stock combos stay stock: Shift + Control, Shift + Drum, and Seq, Arp and Mute pr
 | ![Track editor](docs/screenshots/track-editor.png) | ![Device settings](docs/screenshots/device-settings.png) |
 | ![Playable manual](docs/screenshots/manual.png) | |
 
-## Building the firmware
+## Installing (no tools needed)
+
+1. Open `web/keystep-interactive-manual.html` in Chrome or Edge and go to **Device settings > Firmware**.
+2. Click **Back up all 16 projects**.
+3. Click **Choose Arturia's 2.5.20 file…** and pick `keystep-pro_Firmware_Update_2.5.20.0.kspf`. This is the file MIDI Control Center installs; on a Mac it is in `/Library/Arturia/MIDI Control Center/`.
+4. The page checks that every part of the file is Arturia's 2.5.20 and applies KSCON's changes. It then checks that the result matches the tested build byte for byte and offers `KSCON_2.5.99_build4.kspf` to download.
+5. Flash that file with MIDI Control Center like an official update. To go back, flash Arturia's 2.5.20 file again.
+
+Everything happens in the browser and nothing is uploaded. The page carries only the bytes KSCON changes (about 5.5 KB), not Arturia's firmware, and it refuses any input other than the official 2.5.20 file.
+
+![Firmware card](docs/screenshots/firmware-card.png)
+
+## Building the firmware yourself
 
 Needs Python 3.10+, `clang` with an ARM target (Apple clang or LLVM), and `unicorn` and `capstone` for the tests (`pip install -r requirements.txt`).
 
@@ -49,6 +61,7 @@ Needs Python 3.10+, `clang` with an ARM target (Apple clang or LLVM), and `unico
    - `tools/test_pad_hooks.py` runs the hooks on the real firmware code in Unicorn, with every firmware call stubbed and checked.
    - `tools/test_names_hooks.py` checks the project-name hooks the same way.
    - The bass test also runs the page's `makeBass` in node and checks that the firmware writes the same notes.
+   - It then regenerates the page's patch data (`tools/make_web_patch.py`) and checks in headless Chrome that the page turns the stock file into this exact build (`tools/test_web_patch.py`).
 3. Flash the `.kspf` with MIDI Control Center the same way as an official update. To go back, flash Arturia's 2.5.20 file again. MCC may treat this as a downgrade from 2.5.99.
 
 The tests run the patch in an emulator. Every feature listed above has also been checked on a real KeyStep Pro (`docs/test-checklist.html` is the checklist used). Back up your projects before flashing anything. Use at your own risk.
@@ -59,6 +72,7 @@ The tests run the patch in an emulator. Every feature listed above has also been
 | `tools/bass_gen.c` | the bass generator, compiled into the hook block (no linker, no relocations) |
 | `tools/name_hooks.S` | project names: SysEx setter and title display |
 | `tools/boot_logo.py` | redraws the display chip's startup picture (`--preview out.png`) |
+| `tools/make_web_patch.py`, `tools/test_web_patch.py` | the page's patch data (changed bytes and hashes only) and its end-to-end check |
 | `tools/build_ksp_patch.py` | assembles everything, redirects the stock calls, sets the version, fixes checksums and writes the `.kspf` |
 | `tools/kspemu.py`, `tools/ksp_link.py` | the firmware's SysEx parser and project storage, emulated, plus a CoreMIDI link (macOS) |
 | `tools/set_project_name.py`, `tools/ksp_setlist.py`, `tools/ksp_get.py`, `tools/readchord.sh` | device tools: names, set lists (names, chords, keys), read-only GETs |

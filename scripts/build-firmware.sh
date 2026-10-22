@@ -10,3 +10,7 @@ BIN=../firmware/patched/kscon_keysteppro_main__fw2_5_20_2085__2024_03_04.bin
 "$PY" test_names_hooks.py "$BIN"
 N=$(sed -n 's/^PATCH_BUILD = \([0-9]*\).*/\1/p' build_ksp_patch.py)
 "$PY" -c "import zipfile;z=zipfile.ZipFile('../firmware/patched/KSCON_2.5.99_build$N.kspf');assert z.testzip() is None;print('package ok: firmware/patched/KSCON_2.5.99_build$N.kspf')"
+# the page's firmware patcher: regenerate its changed-bytes file and check the page makes this exact build
+"$PY" make_web_patch.py > ../web/src/1f-fwpatch.js
+sh ../web/build.sh
+"$PY" test_web_patch.py ../web
