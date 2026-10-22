@@ -26,6 +26,8 @@ Stock combos stay stock: Shift + Control, Shift + Drum, and Seq, Arp and Mute pr
 
 ## The KeyStep Con page (`web/`)
 
+The **Editor features**, **Manual features** and **Firmware features** buttons at the top of the page list everything below, each with a link straight to it.
+
 `web/keystep-interactive-manual.html` is one self-contained file. Open it in Chrome or Edge and click **Connect KeyStep** (Web MIDI with SysEx): one click finds the KeyStep's port. Without a KeyStep connected, it runs against a built-in simulated KeyStep Pro, which also runs the KSCON pad features. Most of it works on stock firmware too.
 
 **Projects** (a replacement for MIDI Control Center)
