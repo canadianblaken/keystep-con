@@ -85,7 +85,14 @@ setname_hook:
     @ r1 is clobbered on the dispatcher's auto-open-session path.
     push    {r4, lr}
     ldrb    r0, [r4, #8]
-    cmp     r0, #0x7c
+    cmp     r0, #0x7d               @ chord pads (pad_hooks.S)
+    bne     1f
+    mov     r0, r4
+    mov     r1, r7
+    mov     r2, r8
+    bl      chord_set
+    b       setname_done
+1:  cmp     r0, #0x7c
     bne     setname_fallback
     cmp     r8, #16
     bne     setname_done

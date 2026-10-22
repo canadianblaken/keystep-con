@@ -274,3 +274,10 @@ Control test: MIDI channels (globals) and recorded steps survive save + power cy
 - `tools/make_web_patch.py` writes only those runs plus SHA-256 of every stock and patched entry into the page (`src/1f-fwpatch.js`, about 7.5 KB). The page's Firmware card reads the user's own 2.5.20 file, refuses it unless every entry matches stock, applies the runs, refuses unless every result matches the tested build, and rebuilds the zip with the input's own headers, so the download is byte for byte the tested .kspf (checked in the browser against the whole-file hash).
 - `tools/test_web_patch.py <page dir>` runs the page's `tests/fwpatch.js` in headless Chrome with the stock file and checks the output is identical to the built .kspf; a KSCON file, a changed stock file and a non-zip are refused.
 - After every new build: regenerate `src/1f-fwpatch.js`, run test_web_patch.py, release the page.
+
+## Chord pads over SysEx (build 5, 2026-10-22; emulator-tested, not on hardware yet)
+
+- Bulk SET item `0x78` (project), param `0x7D`, one index = track 2-4 as 1-3 (struct byte +4 holds it 0-based), 80 bytes: 16 pads x 5 notes, `0x7F` = unused (stored as `0xFF`). `setname_hook` passes it to `chord_set` (pad_hooks.S): converts into scratch at PAD_STATE+0x200, reads the project's second sector into staging, writes an empty "CHD1" block first if the staged block at +0xFEF0 has no magic, stages the track's 80 bytes at +0xFEF8 + (track-2)*80, programs the sector (one erase per track), clears the session byte 0x20000671 as the name does, and drops the pad RAM copy (ST_TAG = 0xFF, undo cleared) so the next pad press reloads from flash.
+- Wrong length, index past track 4 or slot > 15 is ignored. Other projects untouched; the block survives a name write and a stock open/SET/commit (kspemu, real firmware code).
+- No GET: the pads still cannot be read back over SysEx.
+- `ksp_link.Link.set_chord_pads(proj, track, pads)` sends it; `ksp_setlist.py` writes a plan's `pads` (track -> up to 16 chords) after the name.

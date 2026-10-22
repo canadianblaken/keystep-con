@@ -63,6 +63,19 @@ class Link:
     def set_many(self, proj: int, param: int, item: int, idxs: list[int], data: list[int]) -> None:
         self.send(frame(0x0C, proj, param, len(idxs), item, *idxs, len(data), *data))
 
+    def set_chord_pads(self, proj: int, track: int, pads: list[list[int]]) -> None:
+        """KSCON build 5+: the 16 chord pads of track 2-4, up to 5 notes each (written to flash)."""
+        if track not in (2, 3, 4) or len(pads) > 16:
+            raise ValueError("track 2-4, at most 16 pads")
+        data = []
+        for i in range(16):
+            notes = list(pads[i]) if i < len(pads) else []
+            if len(notes) > 5 or any(not 0 <= n <= 126 for n in notes):
+                raise ValueError(f"pad {i + 1}: up to 5 notes 0..126, got {notes}")
+            data += notes + [0x7F] * (5 - len(notes))
+        self.open(proj)
+        self.send(frame(0x0C, proj, 0x7D, 1, 0x78, track - 1, len(data), *data))
+
     def set_name(self, proj: int, name: str) -> None:
         for data in encode_frames(proj, name):
             self.send(data)

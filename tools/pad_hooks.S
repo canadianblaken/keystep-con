@@ -1118,6 +1118,92 @@ fit_keys:
 9:  pop     {r4-r6, pc}
 .size fit_keys, .-fit_keys
 
+@ SysEx bulk SET item 0x78 (project), param 0x7d, one index = track 2-4 (1-3), 80 bytes:
+@ the track's 16 chord pads x 5 notes, 0x7f = unused. Called from setname_hook with
+@ r0 = message, r1 = data, r2 = length. Writes the track's part of the project's chord block
+@ in flash (an empty block first if the project has none) and drops the RAM copy.
+.equ CS_BUF,        PAD_STATE + 0x200   @ make bass scratch, free outside the combo
+.type chord_set,%function
+chord_set:
+    push    {r4-r7, lr}
+    sub     sp, #12
+    cmp     r2, #80
+    bne     9f
+    ldrb    r4, [r0, #2]            @ normalized slot 0..15
+    cmp     r4, #15
+    bhi     9f
+    ldrb    r5, [r0, #4]            @ index, 0-based: 0..2 = track 2-4
+    cmp     r5, #2
+    bhi     9f
+    ldr     r6, =CS_BUF
+    movs    r2, #0
+1:  ldrb    r3, [r1, r2]
+    cmp     r3, #0x7f
+    blo     2f
+    movs    r3, #PAD_NONE
+2:  strb    r3, [r6, r2]
+    adds    r2, #1
+    cmp     r2, #80
+    blo     1b
+
+    lsl     r1, r4, #17
+    ldr     r2, =0x60010000
+    add     r1, r1, r2
+    movs    r0, #0
+    call_abs SECTOR_READ
+
+    ldr     r0, =(STAGE_BASE + CHORD_SECTOR_OFF)
+    ldr     r0, [r0]
+    ldr     r1, =CHORD_MAGIC
+    cmp     r0, r1
+    beq     4f
+    add     r2, r6, #80             @ no block yet: an empty one
+    str     r1, [r2]
+    movs    r0, #0xff
+    movs    r3, #4
+3:  strb    r0, [r2, r3]
+    adds    r3, #1
+    cmp     r3, #256
+    blo     3b
+    ldr     r0, =STAGE_BASE
+    str     r0, [sp]
+    movs    r0, #0
+    movw    r1, #CHORD_SECTOR_OFF
+    movs    r3, #128                @ halfwords
+    call_abs STAGE_WRITE
+4:  ldr     r0, =STAGE_BASE
+    str     r0, [sp]
+    movs    r0, #0
+    movs    r1, #80
+    muls    r1, r5, r1
+    movw    r2, #(CHORD_SECTOR_OFF + 8)
+    add     r1, r1, r2
+    mov     r2, r6
+    movs    r3, #40                 @ halfwords
+    call_abs STAGE_WRITE
+
+    lsl     r1, r4, #17
+    ldr     r2, =0x60010000
+    add     r1, r1, r2
+    movs    r0, #0
+    call_abs SECTOR_WRITE
+    ldr     r0, =0x20000671         @ as the name: no session left for the close handler
+    movs    r1, #0
+    strb    r1, [r0]
+    ldr     r0, =PAD_STATE          @ the RAM copy reloads from flash on next use
+    ldr     r1, [r0]
+    ldr     r2, =PAD_MAGIC
+    cmp     r1, r2
+    bne     9f
+    movs    r1, #0xff
+    strb    r1, [r0, #ST_TAG]
+    movs    r1, #0
+    strb    r1, [r0, #ST_UNDO]
+9:  add     sp, #12
+    pop     {r4-r7, pc}
+.size chord_set, .-chord_set
+.ltorg
+
 @ degree codes per step: scale degree above the root (0 = root), +0x40 octave up, +0x20 down
 .equ U, 0x40
 .equ D, 0x20

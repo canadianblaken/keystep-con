@@ -238,7 +238,43 @@ def run(path: Path) -> None:
           "slot range guard, stock setter passthrough, Mac-tool round trip, header checksum, stack alignment")
 
 
+def chord_pads(path: Path) -> None:
+    """Chord pad write (item 0x78 param 0x7d) through the real SysEx path in kspemu."""
+    from ksp_link import EmuLink, frame
+    link = EmuLink(str(path))
+    emu = link.emu
+    block = lambda proj: bytes(emu.nor[(proj - 1) * 0x20000 + 0x1FEF0:(proj - 1) * 0x20000 + 0x1FFF0])
+    pad_state = 0xC01EF800
+    emu.uc.mem_write(pad_state, b"ZDAQ")
+    emu.uc.mem_write(pad_state + 6, b"\x02")                  # RAM copy holds project 3
+    emu.uc.mem_write(pad_state + 112, b"\x01")                # with an undo pending
+    pads = [[60, 64, 67], [], [62, 65, 69, 72, 74]]
+    link.set_chord_pads(3, 3, pads)
+    b = block(3)
+    assert b[:8] == b"CHD1" + b"\xff" * 4, b[:8]
+    want = bytes(sum(([*p] + [0xFF] * (5 - len(p)) for p in pads), [])) + b"\xff" * 65
+    assert b[88:168] == want and b[8:88] == b"\xff" * 80 and b[168:] == b"\xff" * 88
+    assert bytes(emu.uc.mem_read(pad_state + 6, 1)) == b"\xff", "RAM copy not dropped"
+    assert bytes(emu.uc.mem_read(pad_state + 112, 1)) == b"\x00", "undo not cleared"
+    assert all(block(p) == b"\xff" * 256 for p in (1, 2, 4, 16))
+    link.set_chord_pads(3, 2, [[48, 55]])                      # another track keeps track 3
+    b2 = block(3)
+    assert b2[8:10] == bytes((48, 55)) and b2[88:168] == want
+    link.set_name(3, "Song")                                   # name and a stock commit keep it
+    link.open(3)
+    link.set(3, 0x6B, 0x7C, 1, [0x20])
+    link.commit(3)
+    assert block(3) == b2 and emu.nor[2 * 0x20000 + 0x1FFF0:2 * 0x20000 + 0x1FFF5] == b"Song\0"
+    before = bytes(emu.nor)
+    link.send(frame(0x0C, 3, 0x7D, 1, 0x78, 4, 80, *[60] * 80))   # track index past 4
+    link.send(frame(0x0C, 3, 0x7D, 1, 0x78, 1, 79, *[60] * 79))   # short payload
+    assert bytes(emu.nor) == before and not emu.errors, emu.errors
+    print("PASS: chord pad write via SysEx (block layout, empty-block init, per-track update, RAM copy "
+          "dropped, other projects untouched, survives name write + stock commit, guards)")
+
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         raise SystemExit("usage: test_names_hooks.py patched-main.bin")
     run(Path(sys.argv[1]))
+    chord_pads(Path(sys.argv[1]))

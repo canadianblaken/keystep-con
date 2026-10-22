@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write a set list of songs to KeyStep Pro projects: name, chord shape, chord mode, key.
+"""Write a set list of songs to KeyStep Pro projects: name, chord shape, chord mode, key, chord pads.
 
 Per project: the name; each planned track's chord shape (p0x57) with chord
 mode on (p0x56 bit 0x10); and for full-chord plans each track's root (p0x6B)
@@ -9,6 +9,10 @@ Root/scale live in patterns and only count when the pattern is valid. A
 default pattern's stored bytes may be junk (erased flash), so before marking
 it valid the tool writes every pattern parameter with the firmware's default
 values (read from the getter, which reports defaults for default patterns).
+
+Chord pads (KSCON build 5+, "pads" in the plan: track -> up to 16 chords): the song's chords on
+that track's step pads, written last, straight to flash. They cannot be read back over SysEx,
+so only --emulate verifies them; on the device, play them (hold Seq + press Arp on track 2).
 
 Firmware quirk handled: a SysEx commit (cmd 06) flips every pattern's
 valid/default marker unless its state is re-sent, so the tool reads the state
@@ -46,7 +50,7 @@ SINGLE = {0x7B: [0x14, 0x15, 0x16, 0x17, 0x19, 0x1A, 0x1B, 0x1C, 0x61, 0x62, 0x6
 PER_STEP = {0x7B: [0x30, 0x31, 0x33, 0x34, 0x35, 0x36], "other": [0x30, 0x31]}
 PER_VOICE_STEP = [0x32, 0x6D, 0x6E, 0x6F, 0x70, 0x71]
 NAME_OVERRIDES: dict[str, str] = {}   # titles that need a shorter 16-character ASCII name: {"Long Title": "Short"}
-PATCHED = Path(__file__).resolve().parents[1] / "firmware/patched/keysteppro_main__fw2_5_20_2085__2024_03_04.bin"
+PATCHED = Path(__file__).resolve().parents[1] / "firmware/patched/kscon_keysteppro_main__fw2_5_20_2085__2024_03_04.bin"
 
 
 def display_name(title: str) -> str:
@@ -159,6 +163,13 @@ def write_project(link: Link, song: dict, log=print) -> list[str]:
     if changed:
         problems.append(f"pattern states differ from target: {changed}")
     link.set_name(proj, display_name(song["title"]))
+    for trk, pads in sorted(song.get("pads", {}).items()):
+        link.set_chord_pads(proj, int(trk), pads)
+        if isinstance(link, EmuLink):
+            at = (proj - 1) * 0x20000 + 0x1FEF0 + 8 + (int(trk) - 2) * 80
+            want = sum(([*p] + [0xFF] * (5 - len(p)) for p in pads), []) + [0xFF] * 5 * (16 - len(pads))
+            if list(link.emu.nor[at:at + 80]) != want:
+                problems.append(f"track {trk} chord pads in flash differ from the plan")
     return problems
 
 
@@ -183,7 +194,8 @@ def main() -> None:
         if not 1 <= s["project"] <= 16:
             raise SystemExit(f"{s['title']}: project {s['project']} out of range")
         print(f"P{s['project']:>2} {display_name(s['title']):<16} {s['plan']:<5} tracks {[t['n'] for t in s['tracks']]} "
-              f"chord {chord_bytes(s['shape'])[:len(s['shape'])]}")
+              f"chord {chord_bytes(s['shape'])[:len(s['shape'])]} pads " +
+              " ".join(f"T{t}x{len(p)}" for t, p in sorted(s.get("pads", {}).items())))
     if args.dry_run:
         return
     link = EmuLink(str(PATCHED)) if args.emulate else CoreMIDILink()
