@@ -21,7 +21,7 @@ built = (ROOT / f"firmware/patched/KSCON_2.5.{PATCH_VERSION}_build{PATCH_BUILD}.
 with tempfile.TemporaryDirectory() as tmp:
     script = Path(tmp) / "fwpatch.js"
     script.write_text(f'const STOCK_B64="{base64.b64encode(KSPF.read_bytes()).decode()}";\n' + (page / "tests/fwpatch.js").read_text())
-    run = subprocess.run(["node", str(page / "tests/cdp.mjs"), f"file://{page}/keystep-interactive-manual.html", str(script)],
+    run = subprocess.run(["node", str(page / "tests/cdp.mjs"), f"file://{page}/kscon-install.html", str(script)],
                          capture_output=True, text=True, env={**os.environ, "TIMEOUT": "120000"}, check=True).stdout
 if "ERRORS:" not in run:
     sys.exit("no result from the page:\n" + run[-2000:])

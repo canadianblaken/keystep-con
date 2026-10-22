@@ -4,7 +4,7 @@ Unofficial firmware patch, editor and playable manual for the **Arturia KeyStep 
 
 KSCON patches Arturia's KeyStep Pro firmware 2.5.20 and adds features to the device itself: project names, drum pads and chord pads on the step buttons, root chords, and an on-device bass generator. The **KeyStep Con page** is a single HTML file that runs in Chrome. It edits projects over USB in place of MIDI Control Center (MCC), and it doubles as a playable manual.
 
-**Try it in your browser: https://canadianblaken.github.io/keystep-con/** (Chrome or Edge; runs against a simulated KeyStep Pro until you connect yours).
+**Try it in your browser: https://canadianblaken.github.io/keystep-con/** (Chrome or Edge; runs against a simulated KeyStep Pro until you connect yours). Firmware installer: https://canadianblaken.github.io/keystep-con/web/kscon-install.html
 
 Not affiliated with or endorsed by Arturia. This repo has no Arturia firmware in it. You build the patch from your own copy of the official 2.5.20 update.
 
@@ -44,15 +44,16 @@ Stock combos stay stock: Shift + Control, Shift + Drum, and Seq, Arp and Mute pr
 
 ## Installing (no tools needed)
 
-1. Open https://canadianblaken.github.io/keystep-con/ (or `web/keystep-interactive-manual.html`) in Chrome or Edge and go to **Device settings > Firmware**.
-2. Click **Back up all 16 projects**.
-3. Click **Choose Arturia's 2.5.20 file…** and pick `keystep-pro_Firmware_Update_2.5.20.0.kspf`. This is the file MIDI Control Center installs; on a Mac it is in `/Library/Arturia/MIDI Control Center/`.
-4. The page checks that every part of the file is Arturia's 2.5.20 and applies KSCON's changes. It then checks that the result matches the tested build byte for byte and offers `KSCON_2.5.99_build4.kspf` to download.
-5. Flash that file with MIDI Control Center like an official update. To go back, flash Arturia's 2.5.20 file again.
+Open the installer, **https://canadianblaken.github.io/keystep-con/web/kscon-install.html**. The editor's top bar links to it too. It walks you through four steps:
 
-Everything happens in the browser and nothing is uploaded. The page carries only the bytes KSCON changes (about 5.5 KB), not Arturia's firmware, and it refuses any input other than the official 2.5.20 file.
+1. **Back up** your 16 projects with the editor's backup tool.
+2. **Make the file.** Choose Arturia's `keystep-pro_Firmware_Update_2.5.20.0.kspf`; MIDI Control Center installs it, and on a Mac it is in `/Library/Arturia/MIDI Control Center/`. The page checks that every part of the file is Arturia's 2.5.20 and applies KSCON's changes. It then checks that the result matches the tested build byte for byte and offers `KSCON_2.5.99_build4.kspf` to download.
+3. **Flash** it with MIDI Control Center like an official update.
+4. **Check** that the startup screen says KEYSTEP CON and that Utility > FW version shows KSCON 2.5.99 b4.
 
-![Firmware card](docs/screenshots/firmware-card.png)
+To go back, flash Arturia's 2.5.20 file again. Everything happens in the browser and nothing is uploaded. The page carries only the bytes KSCON changes (about 5.5 KB), not Arturia's firmware, and it refuses any input other than the official 2.5.20 file.
+
+![Installer](docs/screenshots/installer.png)
 
 ## Building the firmware yourself
 
