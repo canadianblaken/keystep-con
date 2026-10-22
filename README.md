@@ -26,14 +26,36 @@ Stock combos stay stock: Shift + Control, Shift + Drum, and Seq, Arp and Mute pr
 
 ## The KeyStep Con page (`web/`)
 
-`web/keystep-interactive-manual.html` is one self-contained file. Open it in Chrome or Edge and click **Connect KeyStep** (Web MIDI with SysEx). Without a KeyStep connected, it runs against a built-in simulated KeyStep Pro.
+`web/keystep-interactive-manual.html` is one self-contained file. Open it in Chrome or Edge and click **Connect KeyStep** (Web MIDI with SysEx): one click finds the KeyStep's port. Without a KeyStep connected, it runs against a built-in simulated KeyStep Pro, which also runs the KSCON pad features. Most of it works on stock firmware too.
 
-- **Projects**: recall any of the 16 slots, edit tracks in a piano roll and drums in a grid, and edit scenes, project settings and the control track. Undo works, and Store writes back with a confirm. Projects can be saved to a library in the browser or to a file, and all 16 can be backed up and restored.
-- **Make bass** on the page: the same five styles as the firmware, written into any pattern and undoable.
-- **MIDI import/export**: turn .mid files into patterns, or export patterns as .mid.
-- **Device settings**: all 158 global settings in MCC's groups, including the ones MCC hides. Also a MIDI monitor and a firmware card.
-- **Manual**: a playable KeyStep Pro with help on every control, the manual's chapters and guided tours.
-- **Synth CC**: map a synth's CCs (from the MIDI Guide catalogue) to the five knobs.
+**Projects** (a replacement for MIDI Control Center)
+- Recall any of the 16 slots and Store it back. Store asks for a second click and reads the project back to check it, and a Stop button stops a transfer.
+- Track editors: a piano roll for the sequencer tracks and a grid for the drum track, with pattern length, root, scale, step on/off and copy/paste of patterns. Undo and redo work too (Ctrl+Z / Ctrl+Shift+Z).
+- **Steps → drums** puts a melody track's notes on the drum lanes.
+- **Make bass**: the same five styles as the firmware, into any pattern, undoable.
+- Scenes and chains, project settings (tempo, chords, user scales) and the control track.
+- MIDI files: import several files and parts into tracks and patterns, or export patterns as .mid. New empty project, for importing without a KeyStep.
+- A project library in the browser (search, import, export), save and open project files, and a backup of all 16 projects in one file, restoring only the ones you pick.
+- Set list: names, chord shapes and keys for many projects in one go. Chord & key sets one track's chord shape, root and scale. Names gives a slot a name (KSCON).
+
+**Device settings**
+- All 158 global settings in MCC's groups. Each change is written straight away and read back. 12 of them MCC does not show: Program Change send and Fixed Velocity per track, Brightness and Transpose Latch.
+- A MIDI monitor showing what the KeyStep sends.
+- The firmware card shows what the KeyStep runs, with a link to the installer.
+
+**Firmware**
+- A bar at the top offers the KSCON installer, or the update when a connected KeyStep runs an older build.
+- The installer makes the KSCON file in the browser from your own Arturia 2.5.20 file (see Installing below).
+
+**Manual**
+- A playable KeyStep Pro: all buttons, keys, encoders and the touch strip, with synthesized stand-in sounds and an optional MIDI out mirror.
+- Help on every control, the user manual's chapters with Show, 13 guided tours and demo projects.
+- "What's new from this project" explains every KSCON and page feature and the Arturia bugs listed below.
+- The drawing zooms to the part in use.
+
+**Synth CC**
+- Map a synth's parameters to the five knobs, from the MIDI Guide catalogue (447 instruments).
+- The 14-bit synths button offers each 14-bit pair's coarse half.
 
 ![Make bass on the page](docs/screenshots/make-bass-page.png)
 
@@ -41,6 +63,19 @@ Stock combos stay stock: Shift + Control, Shift + Drum, and Seq, Arp and Mute pr
 |---|---|
 | ![Track editor](docs/screenshots/track-editor.png) | ![Device settings](docs/screenshots/device-settings.png) |
 | ![Playable manual](docs/screenshots/manual.png) | |
+
+## Arturia 2.5.20 bugs and quirks found along the way
+
+These are in stock firmware too. The page and KSCON work around them.
+
+- **Save + Track never stores the chord shape or keyboard octave.** It programs the flash first and stages the track's chord block afterwards. Use Save Project, which stores them.
+- **The Save Project confirm trap.** At "Save Project / Confirm ?", pressing a step pad loads that project instead and drops your edits. Confirm by pushing the encoder next to the display.
+- **A SysEx store flips untouched patterns and scenes** between valid and default. MCC hides this by always sending whole projects. The page always sends every state back as it read it.
+- **Some stored values can't be read over SysEx.** The getter sends raw bytes, so 0xF7 and above cut the reply short. The page re-reads such blocks value by value. A chord entered with a note below its root stays unreadable.
+- **Empty drum slots must be 127 in every field**, or the KeyStep reports "192 notes limit". The page writes them that way.
+- **12 global settings aren't in MCC.** They are listed under Device settings above.
+
+All of this, with addresses, is in `findings.md`.
 
 ## Installing (no tools needed)
 
