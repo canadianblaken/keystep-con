@@ -11,6 +11,7 @@
 @   - a step with no chord plays the scale chord of the track's current root and scale:
 @     steps 1-8 triads on degrees 1-8, steps 9-16 7th chords on degrees 1-8, rooted in the
 @     keyboard's lowest octave (Chromatic counts as major; User 1/2 from the project)
+@   - a kept chord moves with the octave buttons (kept as played at octave 0)
 @   - Save Project stores the chords with the project (5 notes per step, 3 tracks x 16 steps)
 @ Hold Seq, press Mute on any track: root chords for that track. Keys on that track are silent
 @ and only pick the root (the lowest one held when a step is pressed; it stays after the key is
@@ -105,6 +106,7 @@
                                     @ magic, 4 spare, then track 2-4 x 16 pads x 5 notes, 0xff unused
 .equ PAD_NONE,      0xff
 .equ PAD_SILENT,    0xfe
+.equ OCT_ZERO,      3               @ track octave byte shown as octave 0 (range -3..+2 = 0..5)
 
 .section .text
 .balign 4
@@ -205,6 +207,27 @@ undo_keep:
     blo     1b
     bx      lr
 .size undo_keep, .-undo_keep
+
+@ r0 = track 0-3 -> r0 = (keyboard octave - octave 0) * 12: stored pad chords are kept as played
+@ at octave 0 (the default) and move with the octave buttons. Uses r0-r3 only.
+.type oct_shift,%function
+oct_shift:
+    ldr     r1, =SEQ_PTR
+    ldr     r1, [r1]
+    ldr     r2, =CUR_PROJECT
+    ldrb    r2, [r2]
+    movw    r3, #0xfec
+    mla     r1, r2, r3, r1
+    movs    r2, #0x16
+    mla     r1, r0, r2, r1
+    movw    r2, #0x1752
+    ldrb    r0, [r1, r2]
+    and     r0, r0, #7
+    subs    r0, #OCT_ZERO
+    movs    r1, #12
+    mul     r0, r0, r1
+    bx      lr
+.size oct_shift, .-oct_shift
 
 @ scale chord for pad r1 (0-15) of track r0 (1-3) into r2[0..3]; returns the count in r0
 .type chord_notes,%function
@@ -638,13 +661,18 @@ press_chord:
     mov     r11, r3
     mov     r0, r6
     bl      undo_keep
+    mov     r0, r8
+    bl      oct_shift
+    mov     r12, r0                 @ kept as played at octave 0
     mov     r3, r11
     movs    r2, #0                  @ store the capture; it sounds already on the keys
 6:  cmp     r2, r3
-    ite     lo
-    ldrblo  r0, [sp, r2]
-    movhs   r0, #0xff
-    strb    r0, [r6, r2]
+    bhs     61f
+    ldrb    r0, [sp, r2]
+    sub     r0, r0, r12
+    b       62f
+61: movs    r0, #0xff
+62: strb    r0, [r6, r2]
     adds    r2, #1
     cmp     r2, #CHORD_NOTES
     blo     6b
@@ -660,13 +688,25 @@ press_chord:
     ldrb    r0, [r6]
     cmp     r0, #127
     bhi     8f
-    movs    r2, #0                  @ stored chord -> sounding list
+    mov     r0, r8                  @ stored chord -> sounding list, moved with the octave
+    bl      oct_shift
+    mov     r12, r0
+    movs    r2, #0                  @ read
+    movs    r3, #0                  @ written
 71: ldrb    r0, [r6, r2]
-    add     r1, r10, r2
+    cmp     r0, #127
+    bhi     72f
+    add     r0, r0, r12
+    cmp     r0, #127
+    bhi     72f                     @ out of range (also negative): skipped
+    add     r1, r10, r3
     strb    r0, [r1, #ST_NOTE]
-    adds    r2, #1
+    adds    r3, #1
+72: adds    r2, #1
     cmp     r2, #CHORD_NOTES
     blo     71b
+    cmp     r3, #0                  @ nothing in range: stays taken silently
+    beq     press_done
     b       press_send
 8:  mov     r0, r8
     mov     r1, r9

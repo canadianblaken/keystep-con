@@ -281,3 +281,7 @@ Control test: MIDI channels (globals) and recorded steps survive save + power cy
 - Wrong length, index past track 4 or slot > 15 is ignored. Other projects untouched; the block survives a name write and a stock open/SET/commit (kspemu, real firmware code).
 - No GET: the pads still cannot be read back over SysEx.
 - `ksp_link.Link.set_chord_pads(proj, track, pads)` sends it; `ksp_setlist.py` writes a plan's `pads` (track -> up to 16 chords) after the name.
+
+## Kept pad chords follow the octave (build 6, 2026-10-26; emulator only)
+
+- Chord pads stored chords played at fixed pitch, so at a low keyboard octave they sounded up to 2 octaves above the keys. Now `oct_shift` (pad_hooks.S) gives (track octave byte - 3) * 12; byte 3 = octave 0 on the panel (range -3..+2 = bytes 0..5). Capture stores notes minus the shift, play adds it (notes past 0..127 skipped). Stored chords (flash "CHD1" block and SysEx `0x7D` writes) therefore mean "as played at octave 0". Chords captured at another octave before build 6 play shifted by that difference.

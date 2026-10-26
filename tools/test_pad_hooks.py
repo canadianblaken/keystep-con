@@ -255,6 +255,19 @@ def run(path: Path) -> None:
     pad(4)
     keys()
     assert pad(4) == on(1, 60, 64, 67, 71, 72) + off(1, 60, 64, 67, 71, 72)
+    # kept chords move with the octave (kept as played at octave 0 = byte 3)
+    track_key(1, 0, 1, octave=1)
+    assert pad(4) == on(1, 36, 40, 43, 47, 48) + off(1, 36, 40, 43, 47, 48), "two octaves down"
+    keys((45, 1), (38, 1), (41, 1))              # captured at octave 1
+    assert pad(6) == []
+    keys()
+    assert pad(6) == on(1, 38, 41, 45) + off(1, 38, 41, 45), "plays where it was captured"
+    track_key(1, 0, 1, octave=0)
+    assert pad(6) == on(1, 26, 29, 33) + off(1, 26, 29, 33)
+    track_key(1, 0, 1, octave=7)                 # top of the byte range
+    assert pad(4) == on(1, 108, 112, 115, 119, 120) + off(1, 108, 112, 115, 119, 120)
+    track_key(1, 0, 1)
+    assert pad(6) == on(1, 62, 65, 69) + off(1, 62, 65, 69)
     # Erase + step forgets it: back to the scale chord
     held(ERASE, True)
     assert pad(4) == [] and not stock
