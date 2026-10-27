@@ -2,7 +2,7 @@
 """Write a set list of songs to KeyStep Pro projects: name, chord shape, chord mode, key, chord pads.
 
 Per project: the name; each planned track's chord shape (p0x57) with chord
-mode on (p0x56 bit 0x10); and for full-chord plans each track's root (p0x6B)
+mode on (p0x56 bit 0x10; a track with "chord": false gets it cleared); and for full-chord plans each track's root (p0x6B)
 and scale (p0x6C) on all 16 patterns, plus the User 1 scale mask when used.
 
 Root/scale live in patterns and only count when the pattern is valid. A
@@ -100,6 +100,7 @@ def write_project(link: Link, song: dict, log=print) -> list[str]:
     """Returns a list of verification problems (empty = verified)."""
     proj, problems = song["project"], []
     tracks = [t["n"] for t in song["tracks"]]
+    chord_tracks = [t["n"] for t in song["tracks"] if t.get("chord", True)]
     chord = chord_bytes(song["shape"])
     link.open(proj)
     states = read_states(link, proj)
@@ -119,9 +120,12 @@ def write_project(link: Link, song: dict, log=print) -> list[str]:
                 return [f"no reply reading default pattern content (track {t['n']})"]
     for t in tracks:
         item = TRACK_ITEMS[t - 1]
-        for i, b in enumerate(chord, 1):
-            link.set(proj, P_CHORD, item, i, [b])
-        link.set(proj, P_MODE, item, 1, [modes[t] | CHORD_MODE_BIT])
+        if t in chord_tracks:
+            for i, b in enumerate(chord, 1):
+                link.set(proj, P_CHORD, item, i, [b])
+            link.set(proj, P_MODE, item, 1, [modes[t] | CHORD_MODE_BIT])
+        else:
+            link.set(proj, P_MODE, item, 1, [modes[t] & ~CHORD_MODE_BIT])
     target = dict(states)
     for t in keyed:
         item = TRACK_ITEMS[t["n"] - 1]
@@ -142,10 +146,14 @@ def write_project(link: Link, song: dict, log=print) -> list[str]:
     link.open(proj)
     for t in tracks:
         item = TRACK_ITEMS[t - 1]
+        mode = link.get(proj, P_MODE, item, 1)
+        if t not in chord_tracks:
+            if mode is None or mode & CHORD_MODE_BIT:
+                problems.append(f"track {t} chord mode reads {mode}, expected off")
+            continue
         got = [link.get(proj, P_CHORD, item, i) for i in range(1, 17)]
         if got != chord:
             problems.append(f"track {t} chord reads {got}, expected {chord}")
-        mode = link.get(proj, P_MODE, item, 1)
         if mode is None or not mode & CHORD_MODE_BIT:
             problems.append(f"track {t} chord mode reads {mode}")
     for t in keyed:
