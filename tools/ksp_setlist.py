@@ -42,6 +42,15 @@ CHORD_MODE_BIT = 0x10
 P_ROOT, P_SCALE = 0x6B, 0x6C
 SCALES = {"chromatic": 0, "major": 1, "minor": 2, "user1": 8}
 PROJECT_ITEM, P_USER1 = 0x78, (0x65, 0x66, 0x67)   # user scale 1 mask: bits 0-6, 7-11, (unused)
+# Project-level settings of a stock project (120 BPM, scene 1, user scales all notes), as
+# (param, index, value). Any project SET also marks the project block valid (0xAAAA); a
+# project whose block is invalid (e.g. erased) loads as defaults on the panel (C Chromatic,
+# 120 BPM) although its patterns read back fine over SysEx.
+PROJECT_DEFAULTS = ([(0x37, i, 0) for i in range(1, 5)] + [(0x38, i, 0) for i in range(1, 4)]
+                    + [(0x44, 1, 68), (0x45, 1, 4), (0x46, 1, 96), (0x47, 1, 93), (0x48, 1, 0),
+                       (0x49, 1, 16), (0x4A, 1, 50), (0x4B, 1, 0), (0x65, 1, 127), (0x66, 1, 31),
+                       (0x67, 1, 0), (0x68, 1, 127), (0x69, 1, 31), (0x6A, 1, 0)]
+                    + [(0x7B, i, 0) for i in range(1, 6)])
 VOICES, STEPS = 3, 64
 # Pattern parameters (index shapes from classifier 08009102 / parser 080093e6).
 SINGLE = {0x7B: [0x14, 0x15, 0x16, 0x17, 0x19, 0x1A, 0x1B, 0x1C, 0x61, 0x62, 0x63, 0x64,
@@ -75,6 +84,14 @@ def read_states(link: Link, proj: int) -> dict[tuple[int, int, int], int | None]
     return {k: link.get(proj, k[1], k[0], k[2]) for k in keys}
 
 
+def project_block_bad(link: Link, proj: int) -> bool:
+    """True when the project-level settings read as junk (erased block): no reply or tempo out of range."""
+    tempo = [link.get(proj, p, PROJECT_ITEM, 1) for p in (0x46, 0x47, 0x48)]
+    scene = link.get(proj, 0x4B, PROJECT_ITEM, 1)
+    if None in tempo or scene is None or scene > 15:
+        return True
+    bpm100 = tempo[0] | tempo[1] << 7 | tempo[2] << 14   # 12000 = 120.00 BPM
+    return not 3000 <= bpm100 <= 30000
 def read_pattern_defaults(link: Link, proj: int, item: int, pat: int) -> list[tuple[int, list[int], list[int]]] | None:
     """(param, index path, values) for every parameter of a default pattern."""
     key = item if item == 0x7B else "other"
@@ -126,6 +143,10 @@ def write_project(link: Link, song: dict, log=print) -> list[str]:
             link.set(proj, P_MODE, item, 1, [modes[t] | CHORD_MODE_BIT])
         else:
             link.set(proj, P_MODE, item, 1, [modes[t] & ~CHORD_MODE_BIT])
+    if project_block_bad(link, proj):
+        log(f"P{proj}: project settings unreadable or out of range; writing stock values")
+        for param, i, value in PROJECT_DEFAULTS:
+            link.set(proj, param, PROJECT_ITEM, i, [value])
     target = dict(states)
     for t in keyed:
         item = TRACK_ITEMS[t["n"] - 1]
@@ -144,6 +165,8 @@ def write_project(link: Link, song: dict, log=print) -> list[str]:
     link.commit(proj)
 
     link.open(proj)
+    if project_block_bad(link, proj):
+        problems.append("project settings still unreadable after the write")
     for t in tracks:
         item = TRACK_ITEMS[t - 1]
         mode = link.get(proj, P_MODE, item, 1)

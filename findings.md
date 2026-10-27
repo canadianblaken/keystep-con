@@ -285,3 +285,7 @@ Control test: MIDI channels (globals) and recorded steps survive save + power cy
 ## Kept pad chords follow the octave (build 6, 2026-10-26; emulator only)
 
 - Chord pads stored chords played at fixed pitch, so at a low keyboard octave they sounded up to 2 octaves above the keys. Now `oct_shift` (pad_hooks.S) gives (track octave byte - 3) * 12; byte 3 = octave 0 on the panel (range -3..+2 = bytes 0..5). Capture stores notes minus the shift, play adds it (notes past 0..127 skipped). Stored chords (flash "CHD1" block and SysEx `0x7D` writes) therefore mean "as played at octave 0". Chords captured at another octave before build 6 play shifted by that difference.
+
+## Invalid project block (hardware, 2026-10-27)
+
+- A project whose project-level block (item 0x78) is erased flash loads on the panel as defaults (C Chromatic, 120 BPM), although its patterns read back correctly over SysEx. Signs: tempo `p0x46-48` = 127 127 3, `p0x4B` (current scene) gives no reply. Any project SET (`0800cca8`) writes the block marker 0xAAAA. `ksp_setlist.py` checks the block (`project_block_bad`) and, if bad, writes stock values (`PROJECT_DEFAULTS`) before the commit; verified in the emulator and on hardware.
