@@ -58,6 +58,7 @@
 .equ KEY_LED,       0x08034ab4      @ (seq, note, track) -> key LED id (0x46-0x6a; 0x45/0x6b octave arrows; 0x78 none)
 .equ LED_SET,       0x08053eb8      @ (leds, id, on, colour, [sp] 0, [sp+4] 0)
 .equ LEDS_PTR,      0x20001490
+.equ LED_FLUSH,     0x08054c2c      @ (leds): sends the changed LEDs (+0x184 + id flags)
 .equ TRACK_COLOURS,  0x20000058
 .equ SEL_TRACK,     0x200001a4      @ selected track; 4 = track 1 as drums
 .equ REC_NOTE,      0x0802a244      @ (track, note or drum lane, vel, x) -> note slot (0xc0+ = not recorded)
@@ -524,6 +525,7 @@ press_toggle:
     it      eq
     moveq   r8, #0
     strb    r8, [r7, #ST_MODE]
+    bl      chords_load             @ the step lights show the kept chords from the start
     pop     {r3-r11, pc}
 press_step:
     cmp     r5, #ID_EXIT
@@ -780,10 +782,14 @@ press_send:
     adds    r8, #1
     cmp     r8, #CHORD_NOTES
     blo     9b
-92: ldrb    r0, [r7, #ST_MODE]      @ chord and root-chord pads: the screen names the chord
+92: ldrb    r0, [r7, #ST_MODE]      @ the screen names the chord, or the drum lane and its note
     cmp     r0, #1
-    beq     press_done
-    add     r0, r10, #ST_NOTE
+    bne     93f
+    mov     r0, r9
+    ldrb    r1, [r10, #ST_NOTE]
+    bl      ns_drum
+    b       press_done
+93: add     r0, r10, #ST_NOTE
     bl      ns_pad
 press_done:
     pop     {r3-r11, pc}
@@ -978,6 +984,21 @@ key_rec:
     ldr     r12, =(STOCK_KEY_REC + 1)
     bx      r12
 .size key_rec, .-key_rec
+
+@ every LED send (bl 08054c2c, 7 callers; r0 = the LED object): the step lights show the pads first
+@ while a pad mode is on (note_show.c ns_leds, given chord_notes for the scale chords)
+.global led_flush
+.type led_flush,%function
+led_flush:
+    push    {r4, lr}
+    mov     r4, r0
+    adr     r1, chord_notes + 1
+    bl      ns_leds
+    mov     r0, r4
+    pop     {r4, lr}
+    ldr     r12, =(LED_FLUSH + 1)
+    bx      r12
+.size led_flush, .-led_flush
 
 @ chord for step r1 (0-15) on the root-chord root of track r0 (0-3) into r2[0..4]; count in r0
 .type root_chord,%function

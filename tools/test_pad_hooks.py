@@ -38,6 +38,9 @@ T1_TRACK, T2_TRACK = 0x17, 0x1D
 # make bass: popup (08025274 text, 0801f96c screen prep), scale map rebuild 0803094c (stubbed);
 # the step index rebuild (0802caf0, 0802f340) and the edited flag (0802ceac) run for real
 POPUP, UI_PREP, SCALE_REBUILD = 0x08025274, 0x0801F96C, 0x0803094C
+# step lights: every LED send (08054c2c, stubbed) goes through led_flush; LED object at *0x20001490
+LED_FLUSH, LED_FLUSH_CALLS, LEDS_PTR, LEDS = 0x08054C2C, (0x0800E328, 0x0800E84A, 0x0801696A, 0x0801F7BE, 0x0802A88C,
+                                                         0x0802B876, 0x08030BD6), 0x20001490, 0x20060000
 UI_PTR, UI_OBJ, POPUP_CTX_PTR, POPUP_CTX_VAL = 0x20001510, 0x20050000, 0x200017F8, 0x20051000
 NOTES, STEPOF, PASSES, STEP_INDEX = 0xC0000000, 0xC015C000, 0xC0104000, 0x20003DA0
 PAGE_SRC = Path(__file__).resolve().parents[1] / "web/src"
@@ -60,6 +63,7 @@ def run(path: Path) -> None:
     uc.mem_write(SEQ_PTR, SEQ.to_bytes(4, "little"))
     uc.mem_write(UI_PTR, UI_OBJ.to_bytes(4, "little"))          # screen: keys and pads show popups (note_show.c)
     uc.mem_write(POPUP_CTX_PTR, POPUP_CTX_VAL.to_bytes(4, "little"))
+    uc.mem_write(LEDS_PTR, LEDS.to_bytes(4, "little"))
     flash = bytearray(b"\xff" * 0x200000)
     sent: list[bytes] = []
     stock: list[tuple[str, int]] = []
@@ -69,6 +73,7 @@ def run(path: Path) -> None:
     recs: list[tuple] = []
     popups: list[str] = []
     rebuilt: list[int] = []
+    flushes: list[int] = []
     next_slot = [10]
 
     def hook(m: Uc, address: int, _size: int, _data: object) -> None:
@@ -137,6 +142,10 @@ def run(path: Path) -> None:
         elif address == SCALE_REBUILD:
             assert r(UC_ARM_REG_R0) == SEQ
             rebuilt.append(r(UC_ARM_REG_R1))
+            ret()
+        elif address == LED_FLUSH:
+            flushes.append(r(UC_ARM_REG_R0))
+            assert r(UC_ARM_REG_SP) % 8 == 0
             ret()
         elif address == STOP:
             m.emu_stop()
@@ -211,7 +220,9 @@ def run(path: Path) -> None:
     combo(DRUM, SEQ_BTN)
     assert not stock and uc.mem_read(STATE + 4, 1) == b"\1"
     assert pad(1) == on(9, 36) + off(9, 36) and pad(16) == on(9, 51) + off(9, 51)
-    assert popups == [], "drum pads show nothing"
+    assert popups[-1] == "Drum 16\nD#3", popups
+    pad(1)
+    assert popups[-1] == "Drum 1\nC2", popups
     tap(SEQ_BTN)                                 # Seq alone stays stock
     assert stock == [("press", SEQ_BTN), ("release", SEQ_BTN)]
     stock.clear()
@@ -478,6 +489,69 @@ def run(path: Path) -> None:
     combo(T2_SEQ, T2_ARP)
 
     note_show_tests(uc, start, keysend, keys, sent, popups)
+
+    # step lights (led_flush -> ns_leds): pads shown while a pad mode is on, stock lights back after
+    flush = target(LED_FLUSH_CALLS[0])
+    assert all(target(c) == flush for c in LED_FLUSH_CALLS), "all 7 LED sends redirected"
+    step_led = lambda i: LEDS + 0x1C + (0x35 + i) * 3
+    def lights() -> list[tuple[int, int, int]]:
+        flushes.clear()
+        uc.mem_write(LEDS + 0x184, b"\0" * 0x78)
+        start(flush, {UC_ARM_REG_R0: LEDS})
+        assert flushes == [LEDS], "the stock send runs after"
+        b = uc.mem_read(LEDS + 0x1C + 0x35 * 3, 48)
+        return [(b[i * 3], b[i * 3 + 1], b[i * 3 + 2] & 0xF) for i in range(16)]
+    sent_flags = lambda: [uc.mem_read(LEDS + 0x184 + 0x35 + i, 1)[0] for i in range(16)]
+    stock_leds = [(1, 1, 3) if i % 4 == 0 else (0, 0, 8) for i in range(16)]
+    for i, v in enumerate(stock_leds):
+        uc.mem_write(step_led(i), bytes(v))
+    assert uc.mem_read(STATE + 4, 1) == b"\2"
+    combo(T2_SEQ, T2_ARP)                        # chord pads off
+    assert uc.mem_read(STATE + 4, 1) == b"\0"
+    assert lights() == stock_leds and not any(sent_flags()), "no pad mode: untouched"
+    track_key(1, 0, 1)                           # C major, octave 3
+    combo(T2_SEQ, T2_ARP)                        # chord pads, track 2 (colour 22 & 15 = 6)
+    keys((60, 1), (64, 1), (67, 1), (71, 1))     # Cmaj7 held: capture on step 2
+    pad(2)
+    keys()
+    got = lights()
+    table = uc.mem_read(STATE + 128 + 8, 80)                  # track 2's kept chords (earlier tests kept some)
+    kept = [table[i * 5] <= 127 for i in range(16)]
+    assert kept[1] and not all(kept)
+    assert got == [(1, 1, 6) if k else (1, 1, 5) for k in kept], ("kept: track colour, dim; empty: white, dim", got)
+    assert all(sent_flags()[i] for i in range(16) if stock_leds[i] != got[i]), "changed lights are sent"
+    assert lights() == got and not any(sent_flags()), "nothing changed: nothing sent"
+    event("press", STEP1 + 4)                    # pad 5 held
+    assert lights()[4] == (1, 0, 5), "held: white, bright"
+    event("release", STEP1 + 4)
+    assert lights()[4] == (1, 1, 5)
+    keys((64, 1), (67, 1), (72, 1))              # C E G on the keys (any octave): scale chord pads 1 and 8
+    got = lights()
+    assert not kept[0] and not kept[7]
+    assert got[0] == (1, 0, 6) and got[7] == (1, 0, 6), ("matching pads: track colour, bright", got)
+    keys((60, 1), (64, 1), (67, 1), (71, 1))     # Cmaj7: the kept chord on pad 2 (and the scale 7th on pad 9)
+    got = lights()
+    assert got[1] == (1, 0, 6) and got[8] == (1, 0, 6) and got[0] == (1, 1, 6 if kept[0] else 5), got
+    keys((64, 2), (67, 2), (72, 2))              # keys on another track: no match
+    assert lights()[0] == (1, 1, 6 if kept[0] else 5)
+    keys()
+    uc.mem_write(step_led(3), bytes((1, 0, 9)))   # the stock firmware sets a step (playhead) meanwhile
+    assert lights()[3] == (1, 1, 6 if kept[3] else 5), "the pads stay shown"
+    held(SHIFT, False)
+    combo(T2_SEQ, T2_ARP)                        # off: the stock lights come back
+    got = lights()
+    assert got[3] == (1, 0, 9) and all(got[i] == stock_leds[i] for i in range(16) if i != 3), got
+    assert lights() == got, "stays stock"
+    combo(DRUM, SEQ_BTN)                         # drum pads: every lane in track 1's colour (11), dim
+    assert lights() == [(1, 1, 11)] * 16
+    combo(DRUM, SEQ_BTN)
+    assert lights()[0] == stock_leds[0]
+    uc.mem_write(step_led(0), bytes((0, 0, 8)))  # another LED object (not *0x20001490) is never touched
+    combo(T2_SEQ, T2_ARP)
+    flushes.clear()
+    start(flush, {UC_ARM_REG_R0: 0x20070000})
+    assert flushes == [0x20070000] and uc.mem_read(0x20070000 + 0x1C + 0x35 * 3, 3) == b"\0\0\0"
+    lights()                                     # chord pads stay on for the tests below
     bass_tests(uc, start, held, tap, stock, popups, rebuilt)
 
     # channel OFF: pads are taken, nothing sent
@@ -487,7 +561,7 @@ def run(path: Path) -> None:
     print("PASS: stock passthrough when off, drum pads (Drum+Seq), Seq alone stock, chord pads (Seq+Arp) "
           "switching drum pads off and back, scale chords (major, minor, Chromatic->major, octave, 7ths), "
           "capture sorted/dedup/5 max/other tracks ignored, Erase+step, Shift+Exit undo/redo of capture and erase (else stock), note offs after mode off, track 3 channel, "
-          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys; not drums or menus), channel OFF, stack alignment")
+          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), channel OFF, stack alignment")
 
 
 def page_bass(chords: list[tuple[int, list[int]]], length: int) -> dict[str, list] | None:

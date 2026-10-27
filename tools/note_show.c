@@ -6,6 +6,10 @@
  *                  note through the track's scale map, as the stock chord expansion 080382e0 does).
  *   ns_pad(notes)  after a chord pad or root-chord step plays: its 5 note bytes (> 127 = unused).
  *   ns_root(note)  a key on the root-chords track picked a new root.
+ *   ns_drum(lane, note)  a drum pad hit: "Drum 3" and its note.
+ *   ns_leds(leds, chord_notes)  before every LED send (08054c2c): while a pad mode is on, the 16 step
+ *                  lights show the pads (see ns_leds); when it is turned off they get back what the
+ *                  stock firmware last asked for.
  * One note shows as its name and octave ("E3", C4 = 60). Two or more show the chord name on the first
  * line (root position first, else a slash chord over the lowest note; notes that make no known chord
  * are listed) and the notes on the second. The popup is the one Make bass uses (about a second), and it
@@ -28,10 +32,16 @@ typedef unsigned int u32;
 #define POPUP_GATE  (*(volatile u8 *)0x200014d7)
 #define POPUP_TABLE ((const u8 *)0x08020e4e)
 #define TEXT        ((char *)0xC01EFF00)              /* 64 bytes in the pad state block, below Make bass's text */
+#define LEDS_PTR    (*(u8 *volatile *)0x20001490)
+#define TRACK_COLOURS ((volatile u8 *)0x20000058)
+#define PAD         ((u8 *)0xC01EF800)                /* pad state (pad_hooks.S) */
+#define PAD_MAGIC   0x5141445au
+enum { ST_MODE = 4, ST_TAG = 6, ST_NOTE = 16, ST_TABLE = 128 };
 
 typedef u32 (*f_chord_flag)(u8 *seq, u32 track, u32 project);                 /* 0802d160 */
 typedef void (*f_ui)(u8 *ui, u32 what);                                       /* 0801f96c */
 typedef void (*f_popup)(u32 *ctx, const char *text, u32 ms);                  /* 08025274 */
+typedef u32 (*f_scale_chord)(u32 track, u32 pad, u8 *out);                    /* chord_notes (pad_hooks.S) */
 
 #define NS_MAX   12     /* notes kept */
 #define NS_LINE  16     /* characters per screen line */
@@ -162,16 +172,13 @@ static void ns_show(u8 *notes, u32 n)
     ns_popup();
 }
 
-void ns_key(u32 slot)
+/* the notes held on a track's keys, each key with its Chord-mode chord; count */
+static u32 ns_held(u32 track, u8 *notes)
 {
-    u32 track = HELD[slot * 3 + 2];
-    if (track > 3) return;
     u8 *seq = SEQ;
     u32 p = CUR_PROJECT;
-    if (track == 0 && (seq[p * 0xFEC + 0x1753] & 1)) return;      /* track 1 in drum mode */
     const u8 *trk = seq + p * 0xFEC + track * 0x16 + 0x1754;    /* chord root, then offsets (0 ends) */
     u32 chord = trk[0] != 0xFF && ((f_chord_flag)0x0802d161)(seq, track, p);
-    u8 notes[NS_MAX];
     u32 n = 0;
     for (u32 k = 0; k < 37; k++) {
         if (HELD[k * 3 + 2] != track) continue;
@@ -184,7 +191,16 @@ void ns_key(u32 slot)
             if (x >= 0 && x <= 127) n = ns_add(notes, n, KEY_MAP[track * 128 + x]);
         }
     }
-    ns_show(notes, n);
+    return n;
+}
+
+void ns_key(u32 slot)
+{
+    u32 track = HELD[slot * 3 + 2];
+    if (track > 3) return;
+    if (track == 0 && (SEQ[CUR_PROJECT * 0xFEC + 0x1753] & 1)) return;   /* track 1 in drum mode */
+    u8 notes[NS_MAX];
+    ns_show(notes, ns_held(track, notes));
 }
 
 void ns_pad(const u8 *pad)
@@ -201,4 +217,130 @@ void ns_root(u32 note)
     d = ns_put(d, ns_names[note % 12]);
     *d = 0;
     ns_popup();
+}
+
+void ns_drum(u32 lane, u32 note)
+{
+    char *d = ns_put(TEXT, "Drum ");
+    if (lane >= 9) *d++ = (char)('0' + (lane + 1) / 10);
+    *d++ = (char)('0' + (lane + 1) % 10);
+    *d++ = '\n';
+    d = ns_note(d, note);
+    *d = 0;
+    ns_popup();
+}
+
+/* Step lights while a pad mode is on. Each LED is 3 bytes at leds + 0x1c + id*3 {on, dim, colour (low
+   nibble)}, with a send flag at leds + 0x184 + id; the steps are ids 0x35-0x44. Colours: the track's
+   (0x20000058 + track), 5 white; dim = the firmware's low brightness (0802b588).
+     pad held                                 white, bright
+     chord pad holding the chord on the keys  track colour, bright
+     kept chord; any drum or root-chord pad   track colour, dim
+     empty chord pad (plays the scale chord)  white, dim
+   The stock firmware keeps setting the steps (pattern, playhead); what it last asked for is kept in
+   stock[] and put back when the pad mode ends. */
+struct ns_lights {
+    u32 magic;
+    u8 active, pad_[3];
+    u8 mine[16][3];                         /* what we last wrote */
+    u8 stock[16][3];                        /* what the stock firmware last asked for */
+    u16 held_mask, match;                   /* match cache: pitch classes held, pads that match */
+    u8 key_track, key_project;
+    u32 key_sum;
+};
+#define LIGHTS      ((struct ns_lights *)0xC01EFC00)    /* free scratch in the pad state block */
+#define LIGHTS_MAGIC 0x3154474cu                        /* "LGT1" */
+
+static u32 ns_mask(const u8 *notes, u32 n)
+{
+    u32 m = 0;
+    for (u32 i = 0; i < n; i++)
+        if (notes[i] <= 127) m |= 1u << (notes[i] % 12);
+    return m;
+}
+
+/* pads of chord-pad track t (1-3) whose chord has the same notes (any octave) as the keys held */
+static u32 ns_match(struct ns_lights *ls, u32 t, f_scale_chord scale_chord)
+{
+    u8 notes[NS_MAX];
+    u32 held = ns_mask(notes, ns_held(t, notes));
+    if (!held || !(held & (held - 1))) return 0;            /* nothing or one note: no chord */
+    u32 p = CUR_PROJECT;
+    const u8 *kept = PAD[ST_TAG] == p ? PAD + ST_TABLE + 8 + (t - 1) * 80 : 0;
+    u32 sum = 0;
+    if (kept)
+        for (u32 i = 0; i < 80; i++) sum = sum * 31 + kept[i];
+    if (held == ls->held_mask && t == ls->key_track && p == ls->key_project && sum == ls->key_sum)
+        return ls->match;
+    u32 match = 0;
+    for (u32 pad = 0; pad < 16; pad++) {
+        u32 m;
+        if (kept && kept[pad * 5] <= 127) {
+            m = ns_mask(kept + pad * 5, 5);
+        } else {
+            u8 sc[8];
+            m = ns_mask(sc, scale_chord(t, pad, sc));
+        }
+        if (m == held) match |= 1u << pad;
+    }
+    ls->held_mask = (u16)held;
+    ls->key_track = (u8)t;
+    ls->key_project = (u8)p;
+    ls->key_sum = sum;
+    ls->match = (u16)match;
+    return match;
+}
+
+static void ns_led_put(u8 *leds, u32 i, const u8 *v)
+{
+    u8 *e = leds + 0x1c + (0x35 + i) * 3;
+    if (e[0] == v[0] && e[1] == v[1] && (e[2] & 0xf) == v[2]) return;
+    e[0] = v[0];
+    e[1] = v[1];
+    e[2] = (u8)((e[2] & 0xf0) | v[2]);
+    leds[0x184 + 0x35 + i] = 1;
+}
+
+void ns_leds(u8 *leds, f_scale_chord scale_chord)
+{
+    if (leds != LEDS_PTR) return;
+    struct ns_lights *ls = LIGHTS;
+    if (ls->magic != LIGHTS_MAGIC) {
+        ls->magic = LIGHTS_MAGIC;
+        ls->active = 0;
+        ls->held_mask = 0;
+    }
+    u32 mode = *(u32 *)PAD == PAD_MAGIC ? PAD[ST_MODE] : 0;
+    if (mode == 0 || mode > 8) {
+        if (ls->active) {                   /* pad mode ended: the stock lights back (unless it set new ones) */
+            for (u32 i = 0; i < 16; i++) {
+                const u8 *e = leds + 0x1c + (0x35 + i) * 3;
+                if (e[0] == ls->mine[i][0] && e[1] == ls->mine[i][1] && (e[2] & 0xf) == ls->mine[i][2])
+                    ns_led_put(leds, i, ls->stock[i]);
+            }
+            ls->active = 0;
+        }
+        return;
+    }
+    u32 t = mode == 1 ? 0 : mode < 5 ? mode - 1 : mode - 5;
+    u8 colour = TRACK_COLOURS[t] & 0xf;
+    u32 match = mode >= 2 && mode <= 4 ? ns_match(ls, t, scale_chord) : 0;
+    const u8 *kept = mode >= 2 && mode <= 4 && PAD[ST_TAG] == CUR_PROJECT ? PAD + ST_TABLE + 8 + (t - 1) * 80 : 0;
+    for (u32 i = 0; i < 16; i++) {
+        const u8 *e = leds + 0x1c + (0x35 + i) * 3;
+        u8 cur[3] = {e[0], e[1], (u8)(e[2] & 0xf)};
+        if (!ls->active || cur[0] != ls->mine[i][0] || cur[1] != ls->mine[i][1] || cur[2] != ls->mine[i][2])
+            for (u32 k = 0; k < 3; k++) ls->stock[i][k] = cur[k];      /* the stock firmware set it */
+        u8 v[3] = {1, 1, colour};
+        if (PAD[ST_NOTE + i * 5] != 0xFF) {
+            v[1] = 0, v[2] = 5;                                         /* held */
+        } else if (match >> i & 1) {
+            v[1] = 0;                                                   /* the chord on the keys */
+        } else if (mode >= 2 && mode <= 4 && !(kept && kept[i * 5] <= 127)) {
+            v[2] = 5;                                                   /* empty chord pad */
+        }
+        ns_led_put(leds, i, v);
+        for (u32 k = 0; k < 3; k++) ls->mine[i][k] = v[k];
+    }
+    ls->active = 1;
 }

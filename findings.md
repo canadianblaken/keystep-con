@@ -294,6 +294,14 @@ Control test: MIDI channels (globals) and recorded steps survive save + power cy
 - Text: one note "E3" (C4 = 60); several: chord name on line 1 (root position first, else slash chord over the lowest note; 35 shapes: triads, 5, sus, dim/aug, 6, 7ths, 9/11/13 with or without the 5th), notes on line 2 cut at 16 characters with "..". No known chord: the pitch classes. Sharps only, as the panel.
 - Not done: clearing the popup on key release (it times out after ~1 s), an on/off switch, naming notes the arpeggiator or sequencer plays. To check on hardware: popup timing with fast playing, no lag on keys, no popup over menus/Shift pages, Chord-mode names match what sounds.
 
+## Step lights show the pads, drum names (build 8, 2026-10-27; emulator only)
+
+- LED object `*(0x20001490)`: per LED 3 bytes at +0x1C + id*3 {on, dim, colour (low nibble)}, send flag at +0x184 + id; steps are ids 0x35-0x44 (0x74.. are the length LEDs, 0x46-0x6a keys). `08053eb8` (and the bulk step setters `08053f1c`/`08053f90`) only update the buffer and flag; `08054c2c` sends every flagged LED (steps batched via `08054520`), called from 7 places (0800e328, 0800e84a, 0801696a, 0801f7be, 0802a88c, 0802b876, 08030bd6; one passes a stack copy). Colours (`0802b588`): 5 white, 4 red, 6 blue, 8 off, track colours at 0x20000058; the dim byte scales the colour down (stock: steps not under the playhead).
+- All 7 calls go to `led_flush` -> `ns_leds(leds, chord_notes)` -> stock send. Only for the real object: while a pad mode is on, the 16 steps get held = white bright, chord pad matching the keys held on its track (pitch classes, Chord mode included; kept or scale chord) = track colour bright, kept chord / any drum or root-chord pad = track colour dim, empty chord pad = white dim. What the stock firmware sets meanwhile is kept and put back when the mode ends (unless it set something newer). Scratch at 0xC01EFC00 ("LGT1"). Match result cached on held notes + track + project + kept table checksum.
+- Turning a chord pad mode on now loads the project's kept chords (`chords_load`) so the lights are right before the first press.
+- Drum pads name their lane and note ("Drum 1 / C2").
+- To check on hardware: colours/brightness as described, no flicker while the sequencer plays (playhead), stock step lights correct after leaving pad mode, no slowdown.
+
 ## Invalid project block (hardware, 2026-10-27)
 
 - A project whose project-level block (item 0x78) is erased flash loads on the panel as defaults (C Chromatic, 120 BPM), although its patterns read back correctly over SysEx. Signs: tempo `p0x46-48` = 127 127 3, `p0x4B` (current scene) gives no reply. Any project SET (`0800cca8`) writes the block marker 0xAAAA. `ksp_setlist.py` checks the block (`project_block_bad`) and, if bad, writes stock values (`PROJECT_DEFAULTS`) before the commit; verified in the emulator and on hardware.
