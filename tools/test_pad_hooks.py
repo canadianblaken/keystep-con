@@ -58,6 +58,8 @@ def run(path: Path) -> None:
     uc.mem_map(FLASH, 0x200000)
     uc.mem_write(PORT_PTR, PORT.to_bytes(4, "little"))
     uc.mem_write(SEQ_PTR, SEQ.to_bytes(4, "little"))
+    uc.mem_write(UI_PTR, UI_OBJ.to_bytes(4, "little"))          # screen: keys and pads show popups (note_show.c)
+    uc.mem_write(POPUP_CTX_PTR, POPUP_CTX_VAL.to_bytes(4, "little"))
     flash = bytearray(b"\xff" * 0x200000)
     sent: list[bytes] = []
     stock: list[tuple[str, int]] = []
@@ -209,6 +211,7 @@ def run(path: Path) -> None:
     combo(DRUM, SEQ_BTN)
     assert not stock and uc.mem_read(STATE + 4, 1) == b"\1"
     assert pad(1) == on(9, 36) + off(9, 36) and pad(16) == on(9, 51) + off(9, 51)
+    assert popups == [], "drum pads show nothing"
     tap(SEQ_BTN)                                 # Seq alone stays stock
     assert stock == [("press", SEQ_BTN), ("release", SEQ_BTN)]
     stock.clear()
@@ -227,7 +230,9 @@ def run(path: Path) -> None:
     combo(T2_SEQ, T2_ARP)
     assert not stock and uc.mem_read(STATE + 4, 1) == b"\2", stock
     assert pad(1) == on(1, 60, 64, 67) + off(1, 60, 64, 67), pad(1)
+    assert popups[-1] == "C\nC4 E4 G4", popups
     assert pad(5)[:3] == on(1, 67, 71, 74)
+    assert popups[-1] == "G\nG4 B4 D5", popups
     leds.clear()
     pad(1)
     assert leds == [(0x46 + n % 37, 1, 22) for n in (60, 64, 67)] + [(0x46 + n % 37, 0, 8) for n in (60, 64, 67)], leds
@@ -368,7 +373,9 @@ def run(path: Path) -> None:
         return out
 
     assert key(50, 1) == [], "a key on the root-chord track is silent"
+    assert popups[-1] == "Root: D", popups
     assert key(64, 2) == [bytes((0x90, 64, 0x64))], "keys on other tracks are sent"
+    assert popups[-1] == "E4", popups
     expect = {1: [50, 62], 2: [50, 52, 57], 3: [50, 53, 57], 4: [50, 55, 57], 5: [50, 57, 62], 6: [50, 53, 57, 59],
               7: [50, 53, 57, 60], 8: [62, 65, 69], 9: [50, 53, 57, 60, 64], 10: [50, 53, 57, 64], 11: [50, 53, 60, 64, 67],
               12: [53, 57, 62], 13: [50, 53, 60, 64, 71], 14: [57, 62, 65], 15: [50, 55, 57, 60], 16: [50, 53, 57]}
@@ -455,6 +462,7 @@ def run(path: Path) -> None:
     start(keyrec, {UC_ARM_REG_R1: 0x20010004, UC_ARM_REG_R3: 0x20010000})
     assert uc.reg_read(UC_ARM_REG_R0) == 0 and recs == [], recs
     assert uc.mem_read(STATE + 120, 1) == bytes((62,)), "the key picks the root, mapped to the scale"
+    assert popups[-1] == "Root: D", popups
     track_key(1, 0, 1, octave=2)
     recs.clear()
     assert pad(3)[:3] == on(1, 62, 65, 69), "steps follow the key the handler dropped"
@@ -469,6 +477,7 @@ def run(path: Path) -> None:
     uc.mem_write(RECORDING, b"\0")
     combo(T2_SEQ, T2_ARP)
 
+    note_show_tests(uc, start, keysend, keys, sent, popups)
     bass_tests(uc, start, held, tap, stock, popups, rebuilt)
 
     # channel OFF: pads are taken, nothing sent
@@ -478,7 +487,7 @@ def run(path: Path) -> None:
     print("PASS: stock passthrough when off, drum pads (Drum+Seq), Seq alone stock, chord pads (Seq+Arp) "
           "switching drum pads off and back, scale chords (major, minor, Chromatic->major, octave, 7ths), "
           "capture sorted/dedup/5 max/other tracks ignored, Erase+step, Shift+Exit undo/redo of capture and erase (else stock), note offs after mode off, track 3 channel, "
-          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), channel OFF, stack alignment")
+          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys; not drums or menus), channel OFF, stack alignment")
 
 
 def page_bass(chords: list[tuple[int, list[int]]], length: int) -> dict[str, list] | None:
@@ -501,6 +510,63 @@ def page_bass(chords: list[tuple[int, list[int]]], length: int) -> dict[str, lis
         "const out={};for(const [k] of BASS_STYLES){const b=makeBass(src,k);out[k]=b.steps.flatMap((s,i)=>s.notes.map(n=>[i,n.pitch,n.gate,n.vel,n.shift,n.rand]))}",
         "console.log(JSON.stringify(out))"])
     return json.loads(subprocess.run(["node", "-e", js], check=True, capture_output=True, text=True).stdout)
+
+
+def note_show_tests(uc, start, keysend, keys, sent, popups) -> None:
+    """The screen names the notes held on a key's track after the key is sent (track 3 here)."""
+    proj, t = 2, 2
+    uc.mem_write(CUR_PROJECT, bytes((proj,)))
+    trk = SEQ + proj * 0xFEC + t * 0x16 + 0x1752
+    uc.mem_write(trk, bytes((3, 0x78, 0xFF)))                     # octave 0, Chord mode off, no chord
+    uc.mem_write(0x20000674 + t * 0x80, bytes(range(128)))        # scale map: Chromatic
+
+    def show(*held_keys: tuple[int, int]) -> str | None:
+        keys(*held_keys)                                          # slot 0 is the key being sent
+        sp = 0x200FE000
+        uc.mem_write(sp + 0x6A, b"\0")
+        popups.clear()
+        sent.clear()
+        start(keysend, {UC_ARM_REG_SP: sp, UC_ARM_REG_R0: PORT, UC_ARM_REG_R1: 0x640000 | held_keys[0][0] << 8 | 0x90,
+                        UC_ARM_REG_R2: 3})
+        assert sent == [bytes((0x90, held_keys[0][0], 0x64))], "the key is still sent"
+        keys()
+        assert len(popups) <= 1
+        return popups[0] if popups else None
+
+    k = lambda *notes: [(n, t) for n in notes]
+    assert show(*k(64)) == "E4"
+    assert show(*k(21)) == "A0" and show(*k(0)) == "C-1"
+    assert show(*k(60, 64, 67)) == "C\nC4 E4 G4"
+    assert show(*k(67, 60, 64)) == "C\nC4 E4 G4", "held order does not matter"
+    assert show(*k(64, 67, 72)) == "C/E\nE4 G4 C5"
+    assert show(*k(57, 60, 64, 67)) == "Am7\nA3 C4 E4 G4"
+    assert show(*k(61, 65, 68)) == "C#\nC#4 F4 G#4"
+    assert show(*k(62, 65, 69, 72)) == "Dm7\nD4 F4 A4 C5"
+    assert show(*k(67, 71, 74, 77)) == "G7\nG4 B4 D5 F5"
+    assert show(*k(60, 67)) == "C5\nC4 G4"
+    assert show(*k(62, 67, 69)) == "Dsus4\nD4 G4 A4"
+    assert show(*k(60, 61)) == "C C#\nC4 C#4", "no known chord: the notes"
+    assert show(*k(60, 72)) == "C\nC4 C5", "octaves of one note"
+    assert show(*k(60, 62, 64, 65, 67, 69, 71)) == "C D E F G A B\nC4 D4 E4 F4 G4..", "long lists are cut"
+    assert show((64, t), (60, 1)) == "E4", "only the key's own track"
+    # Chord mode: each key adds the track's chord, every note through the scale map (C major: G# -> G)
+    uc.mem_write(trk, bytes((0x83, 0x78, 64, 4, 7, 0)))
+    uc.mem_write(0x20000674 + t * 0x80 + 68, bytes((67,)))
+    assert show(*k(64)) == "Em\nE4 G4 B4"
+    assert show(*k(60)) == "C\nC4 E4 G4"
+    uc.mem_write(trk, bytes((3, 0x78, 0xFF)))
+    uc.mem_write(0x20000674 + t * 0x80 + 68, bytes((68,)))
+    # nothing for track 1 in drum mode or a key without a track
+    uc.mem_write(CUR_PROJECT, bytes((proj,)))
+    uc.mem_write(SEQ + proj * 0xFEC + 0x1753, b"\1")
+    assert show((36, 0)) is None
+    uc.mem_write(SEQ + proj * 0xFEC + 0x1753, b"\0")
+    assert show((36, 0)) == "C2"
+    assert show((36, 4)) is None
+    # no popup over menus or other screens (UI state above 0x60), as the stock popup
+    uc.mem_write(UI_OBJ + 0xC, b"\x70")
+    assert show(*k(64)) is None
+    uc.mem_write(UI_OBJ + 0xC, b"\0")
 
 
 def bass_tests(uc, start, held, tap, stock, popups, rebuilt) -> None:
@@ -606,7 +672,7 @@ def bass_tests(uc, start, held, tap, stock, popups, rebuilt) -> None:
     before = target_notes()
     assert uc.mem_read(STATE + 480, 1) == b"\xff", "Seq let go: no bass track"
     tap(STEP1 + 1)                                                    # steps go back to what they did (root chords here)
-    assert target_notes() == before and popups[-1].startswith("Bass: Follow")
+    assert target_notes() == before and not popups[-1].startswith("Bass"), "the step plays (and names) its chord"
     stock.clear()
 
     # the style is kept: the next Seq + Track uses Follow; Seq on the same row + its Track is stock

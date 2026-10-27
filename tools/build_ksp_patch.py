@@ -38,11 +38,11 @@ STOCK_RELEASE = 0x0804E700
 # (99 is above MCC's minimum 2.5.14 compared as numbers or as text); the build byte counts our builds.
 ID_BUILD_IMM, ID_PATCH_IMM = 0x080181D2, 0x080181D8
 PATCH_VERSION = 99
-PATCH_BUILD = 6               # bump for every build that is flashed
+PATCH_BUILD = 7               # bump for every build that is flashed
 VERSION_TEXT_PTR = 0x080589A4  # Utility > FW version text, stock "Firmware version :\n2.5.20\nbuild 2085"
 STOCK_VERSION_TEXT = 0x0805AF3C
 SOURCES = [ROOT / "tools/name_hooks.S", ROOT / "tools/pad_hooks.S"]
-C_SOURCES = [ROOT / "tools/bass_gen.c"]   # compiled to Thumb assembly and assembled with the hooks
+C_SOURCES = [ROOT / "tools/bass_gen.c", ROOT / "tools/note_show.c"]   # compiled to Thumb assembly and assembled with the hooks
 
 
 def c_to_asm(path: Path, temp: Path) -> str:
@@ -69,6 +69,8 @@ def c_to_asm(path: Path, temp: Path) -> str:
             continue
         lines.append(line)
     text = "\n".join(lines)
+    # each file's compiler-made local labels (.LBB0_1, .LCPI0_0, ...) get the file's name, so they do not clash
+    text = re.sub(r"\.L([A-Za-z_$][\w$]*)", lambda m: f".L{path.stem}_{m.group(1)}", text)
     defined = set(re.findall(r"^([A-Za-z_.$][\w.$]*):", text, re.M))
     called = set(re.findall(r"^\s*(?:bl|blx|b|b\.w)\s+([A-Za-z_][\w.$]*)\s*$", text, re.M))
     called = {c for c in called if not re.fullmatch(r"r\d+|lr|ip|sp|pc", c)}

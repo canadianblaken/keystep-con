@@ -282,9 +282,17 @@ Control test: MIDI channels (globals) and recorded steps survive save + power cy
 - No GET: the pads still cannot be read back over SysEx.
 - `ksp_link.Link.set_chord_pads(proj, track, pads)` sends it; `ksp_setlist.py` writes a plan's `pads` (track -> up to 16 chords) after the name.
 
-## Kept pad chords follow the octave (build 6, 2026-10-26; emulator only)
+## Kept pad chords follow the octave (build 6, 2026-10-26; confirmed on hardware 2026-10-27)
 
 - Chord pads stored chords played at fixed pitch, so at a low keyboard octave they sounded up to 2 octaves above the keys. Now `oct_shift` (pad_hooks.S) gives (track octave byte - 3) * 12; byte 3 = octave 0 on the panel (range -3..+2 = bytes 0..5). Capture stores notes minus the shift, play adds it (notes past 0..127 skipped). Stored chords (flash "CHD1" block and SysEx `0x7D` writes) therefore mean "as played at octave 0". Chords captured at another octave before build 6 play shifted by that difference.
+
+## Note and chord names on the screen (build 7, 2026-10-27; emulator only)
+
+- `tools/note_show.c` (second C file in the hook block; `build_ksp_patch.py` now prefixes each C file's `.L` labels with its name so they cannot clash). Popup as Make bass (`08025274`, 1000 ms, after the `0801f96c` 3/4/5/0x50 prep; skipped when UI state > 0x60 or the `08020e3c` table says no), text at 0xC01EFF00 (64 bytes, pad state block, below Make bass's 0xC01EFF80).
+- `key_send` (080156f6) now sends the key, then `ns_key(slot)`: all held keys on that key's track (held-key table), and on a Chord-mode track each key + the track's chord offsets (track struct +0x1755.., 0 ends; root byte +0x1754 0xFF = no chord) through the track's scale map 0x20000674 + t*0x80, as `080382e0` does; Chord mode from `0802d160(seq, t, p)`. Track 1 in drum mode and track > 3 show nothing.
+- `press_send` after a chord pad or root-chord step: `ns_pad(&notes[pad])`; drum pads show nothing. Root-chord keys (`key_rec`, and `key_send`'s root branch): "Root: E".
+- Text: one note "E3" (C4 = 60); several: chord name on line 1 (root position first, else slash chord over the lowest note; 35 shapes: triads, 5, sus, dim/aug, 6, 7ths, 9/11/13 with or without the 5th), notes on line 2 cut at 16 characters with "..". No known chord: the pitch classes. Sharps only, as the panel.
+- Not done: clearing the popup on key release (it times out after ~1 s), an on/off switch, naming notes the arpeggiator or sequencer plays. To check on hardware: popup timing with fast playing, no lag on keys, no popup over menus/Shift pages, Chord-mode names match what sounds.
 
 ## Invalid project block (hardware, 2026-10-27)
 

@@ -21,6 +21,8 @@
 @   9 ninth, 10 add9, 11 eleventh, 12 1st inversion, 13 thirteenth, 14 2nd inversion, 15 7sus4,
 @   16 triad octave down. Before a key is pressed the root is the track's root in the keyboard's
 @   lowest octave. A chord that runs past the keys shown moves by whole octaves to fit them.
+@ The screen names what keys and chord pads play: a note (E3) or a chord (C#m, A/C#), about a
+@ second each time (note_show.c); root-chord keys show the root.
 @ While the pad's track is selected (track 1 for drum pads), the keys light for the notes a
 @ step plays, in the track colour, as the KeyStep lights notes it plays itself.
 @ With the sequencer recording (Rec), what the steps play is recorded on the selected track
@@ -742,7 +744,7 @@ press_send:
 9:  add     r0, r10, r8
     ldrb    r1, [r0, #ST_NOTE]
     cmp     r1, #127
-    bhi     press_done
+    bhi     92f
     mov     r6, r1
     mov     r0, r11
     movs    r2, #PAD_VELOCITY
@@ -778,6 +780,11 @@ press_send:
     adds    r8, #1
     cmp     r8, #CHORD_NOTES
     blo     9b
+92: ldrb    r0, [r7, #ST_MODE]      @ chord and root-chord pads: the screen names the chord
+    cmp     r0, #1
+    beq     press_done
+    add     r0, r10, #ST_NOTE
+    bl      ns_pad
 press_done:
     pop     {r3-r11, pc}
 press_stock:
@@ -895,13 +902,15 @@ chord_save:
 
 @ the event loop sends a key's note on at 080156f6 (bl 0801a6e0: r0 port, r1 message, r2 3);
 @ [sp + 0x6a] is the key and the held-key table already holds its note and track. A key on the
-@ root-chord track only sets the root; everything else is sent as stock.
+@ root-chord track only sets the root; everything else is sent as stock, then the screen names the
+@ notes held on that key's track (note_show.c).
 .global key_send
 .type key_send,%function
 key_send:
+    push    {r4, lr}
     push    {r0-r3}
-    ldrb    r3, [sp, #16 + KEY_SLOT_SP]
-    add     r3, r3, r3, lsl #1
+    ldrb    r4, [sp, #24 + KEY_SLOT_SP]     @ r4 = the key's slot
+    add     r3, r4, r4, lsl #1
     ldr     r2, =HELD_KEYS
     add     r3, r3, r2              @ r3 = the key's {note, channel, track}
     ldr     r0, =PAD_STATE
@@ -918,11 +927,15 @@ key_send:
     cmp     r1, #127
     bhi     1f
     strb    r1, [r0, #ST_ROOT]
-    pop     {r0-r3}
-    bx      lr
+    add     sp, #16
+    mov     r0, r1
+    bl      ns_root
+    pop     {r4, pc}
 1:  pop     {r0-r3}
-    ldr     r12, =(MIDI_SEND + 1)
-    bx      r12
+    call_abs MIDI_SEND
+    mov     r0, r4
+    bl      ns_key
+    pop     {r4, pc}
 .size key_send, .-key_send
 
 @ the event loop hands a pressed key to the stock key handler at 08015ee0 (bl 080108a4; r1 -> the
@@ -952,8 +965,12 @@ key_rec:
     add     r1, r1, r2, lsl #7
     ldrb    r1, [r1, r3]            @ scale-mapped, as the held-key table stores it
     cmp     r1, #127
-    it      ls
-    strbls  r1, [r0, #ST_ROOT]
+    bhi     2f
+    strb    r1, [r0, #ST_ROOT]
+    push    {r4, lr}
+    mov     r0, r1
+    bl      ns_root                 @ the screen names the new root
+    pop     {r4, lr}
 2:  pop     {r0-r3}
     movs    r0, #0
     bx      lr
