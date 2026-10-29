@@ -74,7 +74,7 @@ def chord_bytes(shape: list[int]) -> list[int]:
     offsets = [n - root for n in shape[1:]]
     if not 0 <= root <= 127 or any(not 0 < o < 0x7F for o in offsets) or len(shape) > 16:
         raise ValueError(f"bad chord shape {shape}")
-    return [root, *offsets] + [0x7F] * (16 - len(shape))
+    return [root, *offsets] + [0] * (16 - len(shape))   # 0 ends the offsets (080382e0); a 0x7F offset plays key+127, which wraps into the next track's scale map (key-1)
 
 
 def read_states(link: Link, proj: int) -> dict[tuple[int, int, int], int | None]:

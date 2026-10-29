@@ -93,6 +93,7 @@ Analysis ELF with .data mapped: `firmware/elf/ksp_main_2.5.20_data.elf` (tools/m
 - Live key note-on `0803890c`: note = map[track][key].
 - Sequencer playback `0802d1e4` / `0802d31c`: step pitch -> optional transposition (`0802cc30`) -> map[track][…]. Quantize is applied at play time, so recorded steps keep their raw pitch.
 - **Chord mode** `080382e0`: chord = up to 15 signed offsets per track (byte array at state + track*0x16 + 0xFEC*cur + 0x1754 + i, i=1..15, 0 terminates; root implicit). For each offset, note = (quantized key) + offset, **then each chord note is snapped through the scale map individually** (ties down). So one stored shape becomes diatonic per key. E major + E-G#-B shape: E->E maj, F#->F#m, G#->G#m, A->A, B->B, C#->C#m (F->E by tie), D#->D# F# A (diminished: G->F#, A#->A by tie).
+- **Pad unused chord offsets with 0, never 0x7F** (2026-10-29): `080382e0` only stops at 0, so a 0x7F offset plays key+127; the scale-map lookup (t*0x80 + note) wraps into the next track's map and comes out as key-1, an extra note a semitone below every Chord-mode key (C E G shape on E played Emaj7; C G C on C played B C G C). Found on hardware by the user; ksp_setlist.py and the page's chordBytes wrote 0x7F until then. All 14 Band Keys projects rewritten with 0 and read back.
 - Limits from strings: 16 notes per step, 192 notes per pattern, 16 notes per arp.
 
 
