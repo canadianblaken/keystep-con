@@ -12,7 +12,7 @@ from pathlib import Path
 
 from unicorn import UC_ARCH_ARM, UC_HOOK_CODE, UC_MODE_THUMB, Uc
 from unicorn.arm_const import (
-    UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_SP,
+    UC_ARM_REG_LR, UC_ARM_REG_PC, UC_ARM_REG_R0, UC_ARM_REG_R1, UC_ARM_REG_R2, UC_ARM_REG_R3, UC_ARM_REG_R4, UC_ARM_REG_SP,
 )
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -27,6 +27,7 @@ KEY_SEND_CALL = 0x080156F6
 KEY_LED, LED_SET, SEL_TRACK, TRACK_COLOURS = 0x08034AB4, 0x08053EB8, 0x200001A4, 0x20000058
 REC_NOTE, REC_END, REC_X, RECORDING, REC_ARMED = 0x0802A244, 0x08029E78, 0x20003D9D, 0x20003D91, 0x20002D5B
 KEY_REC_CALL, STOCK_KEY_REC = 0x08015EE0, 0x080108A4
+STRIP_CALL, STRIP_STOCK, STRIP_SKIP = 0x080124DA, 0x080542DC, 0x08012358
 GLOBALS, PORT_PTR, PORT = 0x20000874, 0x20001800, 0x20003000
 SEQ_PTR, SEQ, CUR_PROJECT, CUR_PAT, MASKS, HELD = 0x20001498, 0x20020000, 0x20004DAD, 0x20004DA8, 0x20000004, 0x20004DDC
 BUTTONS = 0x200014B8 + 0x100
@@ -75,6 +76,7 @@ def run(path: Path) -> None:
     rebuilt: list[int] = []
     flushes: list[int] = []
     next_slot = [10]
+    strips: list[tuple] = []
 
     def hook(m: Uc, address: int, _size: int, _data: object) -> None:
         r = m.reg_read
@@ -147,6 +149,13 @@ def run(path: Path) -> None:
             flushes.append(r(UC_ARM_REG_R0))
             assert r(UC_ARM_REG_SP) % 8 == 0
             ret()
+        elif address == STRIP_STOCK:
+            strips.append(("stock", r(UC_ARM_REG_R0), r(UC_ARM_REG_R1)))
+            assert r(UC_ARM_REG_LR) == STOP | 1
+            ret()
+        elif address == STRIP_SKIP:
+            strips.append(("skip", r(UC_ARM_REG_R4), r(UC_ARM_REG_SP)))
+            m.emu_stop()
         elif address == STOP:
             m.emu_stop()
 
@@ -554,6 +563,28 @@ def run(path: Path) -> None:
     lights()                                     # chord pads stay on for the tests below
     bass_tests(uc, start, held, tap, stock, popups, rebuilt)
 
+    # mod strip lock: Shift + touch the mod strip toggles it (once per Shift hold); locked = mod strip dropped
+    strip = target(STRIP_CALL)
+    assert strip != STRIP_STOCK
+    def touch(n: int) -> tuple:
+        strips.clear()
+        start(strip, {UC_ARM_REG_R0: 0x20012345, UC_ARM_REG_R1: n, UC_ARM_REG_R4: 0x1234})
+        assert len(strips) == 1, strips
+        return strips[0]
+    assert touch(0) == ("stock", 0x20012345, 0) and touch(1) == ("stock", 0x20012345, 1)
+    popups.clear()
+    event("press", SHIFT)
+    assert touch(0) == ("skip", 0x1234, 0x200FF000) and touch(0)[0] == "skip"   # touch while Shift: toggled once
+    assert popups == ["Mod strip\nlocked"], popups
+    assert touch(1)[0] == "stock"                # pitch bend untouched
+    event("release", SHIFT)
+    assert touch(0)[0] == "skip" and touch(1)[0] == "stock"
+    event("press", SHIFT)
+    assert touch(0)[0] == "skip" and popups[-1] == "Mod strip\nunlocked"
+    event("release", SHIFT)
+    assert touch(0)[0] == "stock" and len(popups) == 2
+    stock.clear()
+
     # channel OFF: pads are taken, nothing sent
     glob(76, 127)
     assert pad(1) == [] and not stock
@@ -561,7 +592,7 @@ def run(path: Path) -> None:
     print("PASS: stock passthrough when off, drum pads (Drum+Seq), Seq alone stock, chord pads (Seq+Arp) "
           "switching drum pads off and back, scale chords (major, minor, Chromatic->major, octave, 7ths), "
           "capture sorted/dedup/5 max/other tracks ignored, Erase+step, Shift+Exit undo/redo of capture and erase (else stock), note offs after mode off, track 3 channel, "
-          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), channel OFF, stack alignment")
+          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), mod strip lock (Shift + mod strip toggles, pitch bend untouched), channel OFF, stack alignment")
 
 
 def page_bass(chords: list[tuple[int, list[int]]], length: int) -> dict[str, list] | None:

@@ -49,6 +49,8 @@
 
 .equ STOCK_PRESS,   0x080500d8
 .equ STOCK_RELEASE, 0x0804e700
+.equ STRIP_STOCK,   0x080542dc      @ called at 080124da on a strip value change (r0 only)
+.equ STRIP_SKIP,    0x08012358      @ the event loop's next message
 .equ CHORD_FLAG,    0x0802d160      @ (seq, track, project) -> chord mode on
 .equ LANE_NOTE,     0x080347c8      @ (any, lane) -> sxtb note, Drum Map aware
 .equ MSG_NOTE_ON,   0x08017e70      @ (ch, note, vel) -> packed 0x9n message
@@ -90,7 +92,7 @@
 @ state in external RAM, in a stretch no stock code references (below the
 @ save staging buffer at 0xC01F0000); not cleared at boot, so it carries a magic
 .equ PAD_STATE,     0xC01EF800
-.equ PAD_MAGIC,     0x5141445a      @ "ZDAQ" (v9 layout)
+.equ PAD_MAGIC,     0x5241445a      @ "ZDAR" (v10 layout)
 .equ ST_MODE,       4               @ 0 off, 1 drum pads, 2-4 chord pads for track 2-4,
                                     @ 5-8 root chords for track 1-4
 .equ CT_MODE,       5
@@ -105,6 +107,9 @@
 .equ ST_BT,         480             @ make bass: bass track 0-3 while its Seq is held, 0xff none
 .equ ST_BS,         481             @ make bass: chord track 0-3
 .equ ST_BSTYLE,     482             @ make bass: style 0-4 (bass_gen.c)
+.equ ST_SHIFT,      483             @ mod strip lock (note_show.c ml_strip): 1 while Shift is held
+.equ ST_MLOCK,      484             @ 1 = mod strip locked
+.equ ST_MLDONE,     485             @ 1 = toggled during this Shift hold
 .equ ST_TABLE,      128             @ 256: copy of the project's chord block (flash layout):
                                     @ magic, 4 spare, then track 2-4 x 16 pads x 5 notes, 0xff unused
 .equ PAD_NONE,      0xff
@@ -126,6 +131,9 @@ pad_state:
     str     r0, [r7, #ST_MODE]
     strb    r0, [r7, #ST_UNDO]
     strb    r0, [r7, #ST_BSTYLE]
+    strb    r0, [r7, #ST_SHIFT]
+    strb    r0, [r7, #ST_MLOCK]
+    strb    r0, [r7, #ST_MLDONE]
     movs    r0, #0xff
     strb    r0, [r7, #ST_TAG]
     strb    r0, [r7, #ST_BT]
@@ -427,6 +435,13 @@ pad_press:
     mov     r5, r1
     mov     r6, r2
     bl      pad_state
+    cmp     r5, #ID_SHIFT           @ Shift down: the mod strip lock may toggle once (ml_strip)
+    bne     4f
+    movs    r0, #1
+    strb    r0, [r7, #ST_SHIFT]
+    movs    r0, #0
+    strb    r0, [r7, #ST_MLDONE]
+4:
     @ make bass: Track (0x17/0x1d/0x23/0x29) with another row's Seq (0x14 + 6 * row) held
     subs    r0, r5, #0x17
     cmp     r0, #18
@@ -809,7 +824,11 @@ pad_release:
     mov     r4, r0
     mov     r5, r1
     bl      pad_state
-    ldrb    r0, [r7, #ST_BT]        @ the bass track's Seq let go: steps are steps again
+    cmp     r5, #ID_SHIFT
+    bne     2f
+    movs    r0, #0
+    strb    r0, [r7, #ST_SHIFT]
+2:  ldrb    r0, [r7, #ST_BT]        @ the bass track's Seq let go: steps are steps again
     cmp     r0, #3
     bhi     1f
     add     r0, r0, r0, lsl #1
@@ -879,6 +898,26 @@ release_stock:
     ldr     r12, =(STOCK_RELEASE + 1)
     bx      r12
 .size pad_release, .-pad_release
+
+@ Mod strip lock. The event loop's strip message (from the UI chip, type 2: strip, value) calls 080542dc
+@ at 080124da once the new value is stored and before anything is sent; r1 = strip (0 mod, 1 pitch
+@ bend). For the mod strip, ml_strip (note_show.c) answers 1 to drop it: the loop continues at
+@ 08012358 and no CC 1 / mod CV goes out. Shift + touch toggles the lock (once per Shift hold).
+.global strip_hook
+.type strip_hook,%function
+strip_hook:
+    cbnz    r1, 1f
+    push    {r0-r4, lr}
+    bl      ml_strip
+    mov     r12, r0
+    pop     {r0-r4, lr}
+    cmp     r12, #0
+    bne     2f
+1:  ldr     r12, =(STRIP_STOCK + 1)
+    bx      r12
+2:  ldr     r12, =(STRIP_SKIP + 1)
+    bx      r12
+.size strip_hook, .-strip_hook
 
 @ Save Project, second sector: put the chord table into the staged sector, then program it
 .global chord_save

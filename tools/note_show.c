@@ -35,8 +35,8 @@ typedef unsigned int u32;
 #define LEDS_PTR    (*(u8 *volatile *)0x20001490)
 #define TRACK_COLOURS ((volatile u8 *)0x20000058)
 #define PAD         ((u8 *)0xC01EF800)                /* pad state (pad_hooks.S) */
-#define PAD_MAGIC   0x5141445au
-enum { ST_MODE = 4, ST_TAG = 6, ST_NOTE = 16, ST_TABLE = 128 };
+#define PAD_MAGIC   0x5241445au
+enum { ST_MODE = 4, ST_TAG = 6, ST_NOTE = 16, ST_TABLE = 128, ST_SHIFT = 483, ST_MLOCK = 484, ST_MLDONE = 485 };
 
 typedef u32 (*f_chord_flag)(u8 *seq, u32 track, u32 project);                 /* 0802d160 */
 typedef void (*f_ui)(u8 *ui, u32 what);                                       /* 0801f96c */
@@ -343,4 +343,21 @@ void ns_leds(u8 *leds, f_scale_chord scale_chord)
         for (u32 k = 0; k < 3; k++) ls->mine[i][k] = v[k];
     }
     ls->active = 1;
+}
+
+/* Mod strip lock (strip_hook in pad_hooks.S, for each mod strip value change): 1 = drop it.
+ * With Shift held the first touch toggles the lock and shows it; touches stay dropped while Shift is held. */
+u32 ml_strip(void)
+{
+    if (*(u32 *)PAD != PAD_MAGIC) return 0;
+    if (PAD[ST_SHIFT]) {
+        if (!PAD[ST_MLDONE]) {
+            PAD[ST_MLDONE] = 1;
+            PAD[ST_MLOCK] ^= 1;
+            *ns_put(ns_put(TEXT, "Mod strip\n"), PAD[ST_MLOCK] ? "locked" : "unlocked") = 0;
+            ns_popup();
+        }
+        return 1;
+    }
+    return PAD[ST_MLOCK];
 }
