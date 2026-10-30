@@ -2,7 +2,7 @@
 
 Unofficial firmware patch, editor and playable manual for the **Arturia KeyStep Pro**.
 
-KSCON patches Arturia's KeyStep Pro firmware 2.5.20 and adds features to the device itself: project names, drum pads and chord pads on the step buttons, root chords, and an on-device bass generator. The **KeyStep Con page** is a single HTML file that runs in Chrome. It edits projects over USB in place of MIDI Control Center (MCC), and it doubles as a playable manual.
+KSCON patches Arturia's KeyStep Pro firmware 2.5.20 and adds features to the device itself: project names, drum pads and chord pads on the step buttons (which can also drive the arpeggiator), root chords, an on-device bass generator, note and chord names on the screen, and a mod strip lock. The **KeyStep Con page** is a single HTML file that runs in Chrome. It edits projects over USB in place of MIDI Control Center (MCC), and it doubles as a playable manual.
 
 **Try it in your browser: https://canadianblaken.github.io/keystep-con/** (Chrome or Edge; runs against a simulated KeyStep Pro until you connect yours). Firmware installer: https://canadianblaken.github.io/keystep-con/web/kscon-install.html
 
@@ -16,9 +16,12 @@ Not affiliated with or endorsed by Arturia. This repo has no Arturia firmware in
 |---|---|
 | **Make bass** | Hold **Seq** on the bass track and press the **Track** button of the track with the chords. The bass track's current pattern becomes a bass line (C2–B2) that follows the chords. Keep holding Seq and press steps **1–5** to pick the style: Root, Root + 5th, Octaves, Pulse or Follow rhythm. The screen names the style, and the style is remembered. It works while playing. |
 | **Drum pads** | Hold **Drum** and press **Seq**. Steps 1–16 play drum lanes 1–16 on the drum channel while another track plays on the keys. |
-| **Chord pads** | Hold **Seq** on track 2–4 and press **Arp**. Empty steps play chords of the track's scale. Hold a chord on the keys and tap a step to keep it on that step. **Erase** + step clears it, and **Shift + Exit** undoes or redoes. Kept chords are saved with the project. |
+| **Chord pads** | Hold **Seq** on track 2–4 and press **Arp**. Empty steps play chords of the track's scale. Hold a chord on the keys and tap a step to keep it on that step. **Erase** + step clears it, and **Shift + Exit** undoes or redoes. Kept chords move with the octave buttons and are saved with the project. The page can also write them over SysEx. |
 | **Root chords** | Hold **Seq** and press **Mute** on a track. A key on that track silently sets the root, and steps 1–16 play 16 chord types on it (triads, sus, 6ths, 7ths, 9ths, inversions…). |
-| **Key lights, recording** | Pad notes light the keys they play and are recorded like key presses, including drum hits. |
+| **Chord pads into the arpeggiator** | Put the pads' track in Arp mode (its **Arp** button). Holding a step then arpeggiates its chord with the KeyStep's own arpeggiator, at the Time Division rate (Shift + the Time Division keys), with the arp's pattern, octaves, gate, swing and Hold. Works for chord pads and root chords. Press the track's **Seq** button for plain chords again. While the pads are on, that track's Chord mode is skipped so chords are not stacked. |
+| **Mod strip lock** | Hold **Shift** and touch the mod strip: "Mod strip locked", and the strip sends nothing (no CC 1, no mod CV) until you do it again. The last value stays. Pitch bend and the looper strip are not affected; the lock is off after power-up. |
+| **Note and chord names** | The screen names what you play for about a second: a note (**E3**), or the chord held on a track (**C#m**, **A/C#**) with its notes underneath, including Chord mode, chord pads and root chords. Drum pads show their lane and note (**Drum 1** / C2). Menus are never covered. |
+| **Step lights, key lights, recording** | In a pad mode the 16 steps show the pads: the one held bright white, the pads holding the chord on that track's keys bright in the track colour, kept chords dim in the track colour, empty pads dim white. Pad notes light the keys they play and are recorded like key presses, including drum hits. |
 | **Project names** | Projects can have a 16-character name instead of "Project N". Names are set over SysEx (page or `tools/set_project_name.py`), survive power cycles and are cleared by Erase Project. |
 | **Startup screen, version** | The startup screen shows KEYSTEP CON. The device reports **2.5.99**, and Utility > FW version shows "KSCON 2.5.99 bN / based on 2.5.20". |
 
@@ -28,7 +31,7 @@ Stock combos stay stock: Shift + Control, Shift + Drum, and Seq, Arp and Mute pr
 
 The **Editor features**, **Manual features** and **Firmware features** buttons at the top of the page list everything below, each with a link straight to it.
 
-`web/keystep-interactive-manual.html` is one self-contained file. Open it in Chrome or Edge and click **Connect KeyStep** (Web MIDI with SysEx): one click finds the KeyStep's port. Without a KeyStep connected, it runs against a built-in simulated KeyStep Pro, which also runs the KSCON pad features. Most of it works on stock firmware too.
+`web/keystep-interactive-manual.html` is one self-contained file. Open it in Chrome or Edge and click **Connect KeyStep** (Web MIDI with SysEx): one click finds the KeyStep's port. Without a KeyStep connected, it runs against a built-in simulated KeyStep Pro, which also runs the KSCON features: pads, names, step lights, the mod strip lock and pads into the arpeggiator. Most of it works on stock firmware too.
 
 **Projects** (a replacement for MIDI Control Center)
 - Recall any of the 16 slots and Store it back. Store asks for a second click and reads the project back to check it, and a Stop button stops a transfer.
