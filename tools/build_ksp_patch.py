@@ -37,12 +37,14 @@ STOCK_PRESS = 0x080500D8
 STOCK_RELEASE = 0x0804E700
 STRIP_CALL = 0x080124DA     # bl 080542dc: a touch strip value change, in the event loop
 STRIP_STOCK = 0x080542DC
+CHORD_FLAG_CALLS = (0x08038368, 0x080383B8)   # bl 0802d160 (chord mode on?) in the chord expansion 080382e0
+CHORD_FLAG = 0x0802D160
 # version: the SysEx identity reply builds it from immediates (movs r3,#build / #patch / #minor, major 2 in r2) at
 # 0x080181D2/D8/DE, which MCC shows as $3.$2.$1. Patched builds say 2.5.99 so they are not mistaken for stock 2.5.20
 # (99 is above MCC's minimum 2.5.14 compared as numbers or as text); the build byte counts our builds.
 ID_BUILD_IMM, ID_PATCH_IMM = 0x080181D2, 0x080181D8
 PATCH_VERSION = 99
-PATCH_BUILD = 9               # bump for every build that is flashed
+PATCH_BUILD = 10              # bump for every build that is flashed
 VERSION_TEXT_PTR = 0x080589A4  # Utility > FW version text, stock "Firmware version :\n2.5.20\nbuild 2085"
 STOCK_VERSION_TEXT = 0x0805AF3C
 SOURCES = [ROOT / "tools/name_hooks.S", ROOT / "tools/pad_hooks.S"]
@@ -144,6 +146,9 @@ def build(stock_bin: bytes) -> tuple[bytearray, dict[str, int], int]:
         raise SystemExit("strip call site does not match stock 2.5.20")
     if decode_thumb_bl(KEY_REC_CALL, site(KEY_REC_CALL)) != STOCK_KEY_REC:
         raise SystemExit("key record call changed; refusing stale patch")
+    for call in CHORD_FLAG_CALLS:
+        if decode_thumb_bl(call, site(call)) != CHORD_FLAG:
+            raise SystemExit(f"chord flag call at {call:#x} changed; refusing stale patch")
     for call in LED_FLUSH_CALLS:
         if decode_thumb_bl(call, site(call)) != LED_FLUSH:
             raise SystemExit(f"LED send call at {call:#x} changed; refusing stale patch")
@@ -157,7 +162,8 @@ def build(stock_bin: bytes) -> tuple[bytearray, dict[str, int], int]:
     patches = [(TITLE_CALL, hook_address, True), (SET_DISPATCH, at("setname_hook"), False),
                (PRESS_CALL, at("pad_press"), True), (RELEASE_CALL, at("pad_release"), True),
                (SAVE_CALL, at("chord_save"), True), (KEY_SEND_CALL, at("key_send"), True),
-               (KEY_REC_CALL, at("key_rec"), True), (STRIP_CALL, at("strip_hook"), True)] + [(c, at("led_flush"), True) for c in LED_FLUSH_CALLS]
+               (KEY_REC_CALL, at("key_rec"), True), (STRIP_CALL, at("strip_hook"), True)] + [(c, at("led_flush"), True) for c in LED_FLUSH_CALLS] \
+        + [(c, at("pa_chord_flag"), True) for c in CHORD_FLAG_CALLS]
     for source, target, link in patches:
         patched[source - BASE:source - BASE + 4] = thumb_branch(source, target, link)
         decode = decode_thumb_bl if link else decode_thumb_b_w

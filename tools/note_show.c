@@ -361,3 +361,33 @@ u32 ml_strip(void)
     }
     return PAD[ST_MLOCK];
 }
+
+/* Chord pads into the arpeggiator. A chord pad or root-chord step on a track in Arp mode (track byte +0x1753
+ * bit 0, tracks 2-4) hands its notes to the stock MIDI-in note handler 08018b84 (msg, track) as if they came in
+ * on that track's channel: the stock arp plays them (rate = Time Div, pattern, gate, latch all stock).
+ * pa_on(track): 1 = feed this track's arp. pa_note(track, note, vel): note on, vel 0 = note off. */
+typedef u32 (*f_arp_flag)(u8 *seq, u32 track, u32 project);                   /* 0802b55c */
+typedef void (*f_midi_in)(u32 unused, u8 *msg, u32 track);                    /* 08018b84 */
+
+u32 pa_on(u32 track)
+{
+    return track - 1 < 3 && ((f_arp_flag)0x0802b55d)(SEQ, track, CUR_PROJECT);
+}
+
+void pa_note(u32 track, u32 note, u32 vel)
+{
+    u8 msg[4] = {0x90, (u8)note, (u8)vel, 0};
+    ((f_midi_in)0x08018b85)(0, msg, track);
+}
+
+/* The chord expansion 080382e0 asks 0802d160 whether a track is in Chord mode (bls at 08038368, 080383b8).
+ * While a track's chord or root-chord pads are on and it is in Arp mode, the pads already give chords: its
+ * arp (and its keys) play the notes as they are. */
+u32 pa_chord_flag(u8 *seq, u32 track, u32 project)
+{
+    if (*(u32 *)PAD == PAD_MAGIC && track - 1 < 3) {
+        u32 mode = PAD[ST_MODE];
+        if ((mode == track + 1 || mode == 5 + track) && ((f_arp_flag)0x0802b55d)(seq, track, project)) return 0;
+    }
+    return ((f_chord_flag)0x0802d161)(seq, track, project);
+}

@@ -28,6 +28,7 @@ KEY_LED, LED_SET, SEL_TRACK, TRACK_COLOURS = 0x08034AB4, 0x08053EB8, 0x200001A4,
 REC_NOTE, REC_END, REC_X, RECORDING, REC_ARMED = 0x0802A244, 0x08029E78, 0x20003D9D, 0x20003D91, 0x20002D5B
 KEY_REC_CALL, STOCK_KEY_REC = 0x08015EE0, 0x080108A4
 STRIP_CALL, STRIP_STOCK, STRIP_SKIP = 0x080124DA, 0x080542DC, 0x08012358
+MIDI_IN, CHORD_FLAG_CALLS = 0x08018B84, (0x08038368, 0x080383B8)   # pads -> arp: stock MIDI-in note handler (stubbed)
 GLOBALS, PORT_PTR, PORT = 0x20000874, 0x20001800, 0x20003000
 SEQ_PTR, SEQ, CUR_PROJECT, CUR_PAT, MASKS, HELD = 0x20001498, 0x20020000, 0x20004DAD, 0x20004DA8, 0x20000004, 0x20004DDC
 BUTTONS = 0x200014B8 + 0x100
@@ -77,6 +78,7 @@ def run(path: Path) -> None:
     flushes: list[int] = []
     next_slot = [10]
     strips: list[tuple] = []
+    arp_in: list[tuple] = []
 
     def hook(m: Uc, address: int, _size: int, _data: object) -> None:
         r = m.reg_read
@@ -156,6 +158,10 @@ def run(path: Path) -> None:
         elif address == STRIP_SKIP:
             strips.append(("skip", r(UC_ARM_REG_R4), r(UC_ARM_REG_SP)))
             m.emu_stop()
+        elif address == MIDI_IN:
+            assert r(UC_ARM_REG_R0) == 0 and r(UC_ARM_REG_SP) % 8 == 0
+            arp_in.append((bytes(m.mem_read(r(UC_ARM_REG_R1), 3)), r(UC_ARM_REG_R2)))
+            ret()
         elif address == STOP:
             m.emu_stop()
 
@@ -585,6 +591,59 @@ def run(path: Path) -> None:
     assert touch(0)[0] == "stock" and len(popups) == 2
     stock.clear()
 
+    # chord pads on a track in Arp mode feed its arp (stock MIDI-in handler) instead of sending
+    if uc.mem_read(STATE + 4, 1) != b"\2":                   # Seq + Arp turns any other mode off
+        combo(T2_SEQ, T2_ARP)
+    assert uc.mem_read(STATE + 4, 1) == b"\2", uc.mem_read(STATE + 4, 1)
+    stock.clear()
+    proj = uc.mem_read(CUR_PROJECT, 1)[0]
+    trk = SEQ + proj * 0xFEC + 1 * 0x16 + 0x1752                 # track 2: +0 octave/Chord mode bit 7, +1 Arp bit 0
+    flags = bytes(uc.mem_read(trk, 2))
+    notes = [m[1] for m in pad(1) if m[0] & 0xF0 == 0x90]
+    assert notes and not arp_in
+    uc.mem_write(trk + 1, bytes((flags[1] | 1,)))
+    uc.mem_write(SEL_TRACK, b"\1"); uc.mem_write(RECORDING, b"\1")
+    recs.clear(); popups.clear()
+    assert pad(1) == [], "no MIDI from the pad itself"
+    assert arp_in == [(bytes((0x90, n, 100)), 1) for n in notes] + [(bytes((0x90, n, 0)), 1) for n in notes], arp_in
+    assert not recs, "the arp records itself"
+    assert popups, "the chord is still named"
+    arp_in.clear()
+    event("press", STEP1)                                        # Arp mode off while held: still taken out of the arp
+    uc.mem_write(trk + 1, bytes((flags[1] & ~1,)))
+    event("release", STEP1)
+    assert arp_in == [(bytes((0x90, n, 100)), 1) for n in notes] + [(bytes((0x90, n, 0)), 1) for n in notes], arp_in
+    arp_in.clear()
+    assert [m[1] for m in pad(1) if m[0] & 0xF0 == 0x90] == notes and not arp_in, "Arp mode off: plain chord again"
+    uc.mem_write(RECORDING, b"\0")
+    # Chord mode is ignored by the chord expansion only for the pads' track in Arp mode
+    for call in CHORD_FLAG_CALLS:
+        hookf = target(call)
+        assert hookf != 0x0802D160
+        def chord_flag(t: int) -> int:
+            start(hookf, {UC_ARM_REG_R0: SEQ, UC_ARM_REG_R1: t, UC_ARM_REG_R2: proj})
+            return uc.reg_read(UC_ARM_REG_R0)
+        uc.mem_write(trk, bytes((flags[0] | 0x80,)))
+        uc.mem_write(trk + 1, bytes((flags[1] & ~1,)))
+        assert chord_flag(1) == 1, "Seq mode: Chord mode stays"
+        uc.mem_write(trk + 1, bytes((flags[1] | 1,)))
+        assert chord_flag(1) == 0, "Arp mode with chord pads on: pads give the chords"
+        t3 = SEQ + proj * 0xFEC + 2 * 0x16 + 0x1752
+        f3 = bytes(uc.mem_read(t3, 2))
+        uc.mem_write(t3, bytes((f3[0] | 0x80, f3[1] | 1)))
+        assert chord_flag(2) == 1, "another track keeps Chord mode"
+        uc.mem_write(t3, f3)
+    combo(T2_SEQ, T2_MUTE)                                       # root chords on track 2 feed the arp the same way
+    assert uc.mem_read(STATE + 4, 1) == b"\6"
+    uc.mem_write(trk + 1, bytes((flags[1] | 1,)))
+    arp_in.clear()
+    assert pad(3) == [] and arp_in and all(t == 1 for _, t in arp_in) and \
+        [m[1] for m, _ in arp_in if m[2]] == [m[1] for m, _ in arp_in if not m[2]], arp_in
+    uc.mem_write(trk, flags)
+    combo(T2_SEQ, T2_ARP)
+    arp_in.clear()
+    stock.clear()
+
     # channel OFF: pads are taken, nothing sent
     glob(76, 127)
     assert pad(1) == [] and not stock
@@ -592,7 +651,7 @@ def run(path: Path) -> None:
     print("PASS: stock passthrough when off, drum pads (Drum+Seq), Seq alone stock, chord pads (Seq+Arp) "
           "switching drum pads off and back, scale chords (major, minor, Chromatic->major, octave, 7ths), "
           "capture sorted/dedup/5 max/other tracks ignored, Erase+step, Shift+Exit undo/redo of capture and erase (else stock), note offs after mode off, track 3 channel, "
-          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), mod strip lock (Shift + mod strip toggles, pitch bend untouched), channel OFF, stack alignment")
+          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), mod strip lock (Shift + mod strip toggles, pitch bend untouched), chord pads feed the arp in Arp mode (no MIDI, no record, release after mode change, Chord mode ignored for that track only), channel OFF, stack alignment")
 
 
 def page_bass(chords: list[tuple[int, list[int]]], length: int) -> dict[str, list] | None:

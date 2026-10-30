@@ -21,6 +21,10 @@
 @   9 ninth, 10 add9, 11 eleventh, 12 1st inversion, 13 thirteenth, 14 2nd inversion, 15 7sus4,
 @   16 triad octave down. Before a key is pressed the root is the track's root in the keyboard's
 @   lowest octave. A chord that runs past the keys shown moves by whole octaves to fit them.
+@ A chord pad or root-chord step on a track in Arp mode (stock Arp button) feeds the notes to that
+@ track's arpeggiator instead (note_show.c pa_note, through the stock MIDI-in note handler), so they
+@ play at the arp's Time Div rate and pattern; the track's Chord mode is ignored while its pads are on
+@ and it is in Arp mode (pa_chord_flag), and the arp records itself.
 @ The screen names what keys and chord pads play: a note (E3) or a chord (C#m, A/C#), about a
 @ second each time (note_show.c); root-chord keys show the root.
 @ While the pad's track is selected (track 1 for drum pads), the keys light for the notes a
@@ -114,6 +118,7 @@
                                     @ magic, 4 spare, then track 2-4 x 16 pads x 5 notes, 0xff unused
 .equ PAD_NONE,      0xff
 .equ PAD_SILENT,    0xfe
+.equ PAD_ARP,       0x80            @ in ST_CHAN: the pad's notes went to its track's arp (pa_note)
 .equ OCT_ZERO,      3               @ track octave byte shown as octave 0 (range -3..+2 = 0..5)
 
 .section .text
@@ -748,7 +753,14 @@ press_root:
     cmp     r0, #0
     beq     press_done
 press_send:
-    add     r0, r7, r9
+    ldrb    r0, [r7, #ST_MODE]      @ chord and root-chord pads on a track in Arp mode feed its arp
+    cmp     r0, #1
+    beq     1f
+    mov     r0, r8
+    bl      pa_on
+    cbz     r0, 1f
+    orr     r11, r11, #PAD_ARP
+1:  add     r0, r7, r9
     strb    r11, [r0, #ST_CHAN]
     add     r0, r0, #ST_PTRK
     strb    r8, [r0]
@@ -756,6 +768,9 @@ press_send:
     mov     r0, r8
     ldrb    r1, [r7, #ST_MODE]
     bl      rec_on
+    tst     r11, #PAD_ARP           @ the arp's notes are the stock arp's to record
+    it      ne
+    movne   r0, #0
     mov     r4, r0                  @ r4 = record (the buttons pointer is no longer needed)
     movs    r8, #0
 9:  add     r0, r10, r8
@@ -763,9 +778,16 @@ press_send:
     cmp     r1, #127
     bhi     92f
     mov     r6, r1
-    mov     r0, r11
+    tst     r11, #PAD_ARP
+    beq     94f
+    mov     r0, r5
+    movs    r2, #PAD_VELOCITY
+    bl      pa_note
+    b       95f
+94: mov     r0, r11
     movs    r2, #PAD_VELOCITY
     send_note MSG_NOTE_ON
+95:
     add     r1, r7, r9
     add     r1, r1, #ST_PTRK
     ldrb    r1, [r1]
@@ -864,9 +886,17 @@ release_step:
     cmp     r1, #127
     bhi     10f
     mov     r6, r1
-    mov     r0, r11
+    tst     r11, #PAD_ARP           @ fed to the arp at the press: taken back out of it
+    beq     11f
+    add     r0, r7, r9
+    ldrb    r0, [r0, #ST_PTRK]
+    movs    r2, #0
+    bl      pa_note
+    b       12f
+11: mov     r0, r11
     movs    r2, #0
     send_note MSG_NOTE_OFF
+12:
     add     r1, r7, r9
     add     r1, r1, #ST_PTRK
     ldrb    r1, [r1]
