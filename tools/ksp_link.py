@@ -76,6 +76,22 @@ class Link:
         self.open(proj)
         self.send(frame(0x0C, proj, 0x7D, 1, 0x78, track - 1, len(data), *data))
 
+    def set_shared_pads(self, proj: int, pads: list[list[int]]) -> None:
+        """KSCON build 11+: the project's 64 shared pads (tracks 2-4 play the same ones, a page button picks
+        16), up to 3 notes each, written to flash as 4 pages; the project then uses the shared layout."""
+        if len(pads) > 64:
+            raise ValueError("at most 64 pads")
+        data = []
+        for i in range(64):
+            notes = list(pads[i]) if i < len(pads) else []
+            if len(notes) > 3 or any(not 0 <= n <= 126 for n in notes):
+                raise ValueError(f"pad {i + 1}: up to 3 notes 0..126, got {notes}")
+            data += notes + [0x7F] * (3 - len(notes))
+        self.open(proj)
+        for page in range(4):
+            chunk = data[page * 48:(page + 1) * 48]
+            self.send(frame(0x0C, proj, 0x7D, 1, 0x78, 4 + page, len(chunk), *chunk))
+
     def set_name(self, proj: int, name: str) -> None:
         for data in encode_frames(proj, name):
             self.send(data)

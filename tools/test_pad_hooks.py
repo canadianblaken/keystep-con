@@ -644,6 +644,78 @@ def run(path: Path) -> None:
     arp_in.clear()
     stock.clear()
 
+    # shared pads (build 11): block byte 4 = 1 -> 64 pads x 3 notes for tracks 2-4, page buttons pick 16
+    PAGE1, PAGE4 = 0x3F, 0x42
+    sp_proj = 9
+    track_key(1, 4, 1, project=sp_proj)
+    track_key(2, 4, 1, project=sp_proj)
+    glob(77, 2)
+    shared = [[40 + q] for q in range(63)] + [[60, 64, 67]]
+    blk = bytearray(b"CHD1\x01\xff\xff\xff" + bytes(sum(([*p] + [0xFF] * (3 - len(p)) for p in shared), [])))
+    blk += b"\xff" * (256 - len(blk))
+    at = sp_proj * 0x20000 + 0x1FEF0
+    flash[at:at + 256] = blk
+    tbl = lambda off, n: bytes(uc.mem_read(STATE + 128 + off, n))
+    played = lambda n: [m[1] for m in pad(n) if m[0] & 0xF0 == 0x90]
+    step_light = lambda i: bytes(uc.mem_read(LEDS + 0x1C + (0x35 + i) * 3, 3))
+    assert uc.mem_read(STATE + 4, 1) == b"\2"
+    assert played(1) == [40] and played(16) == [55], "page 1 after loading the project"
+    stock.clear(); popups.clear(); flushes.clear()
+    tap(PAGE1 + 1)
+    assert not stock and popups[-1] == "Pads 17-32\nshared" and flushes, (stock, popups)
+    assert played(1) == [56] and played(16) == [71]
+    tap(PAGE4)
+    assert played(16) == [60, 64, 67] and played(15) == [102]
+    combo(T3_SEQ, T3_ARP)                                        # track 3 plays the same pads, same page
+    assert uc.mem_read(STATE + 4, 1) == b"\3"
+    sent.clear(); tap(STEP1 + 15)
+    assert sent[:3] == on(2, 60, 64, 67), sent
+    combo(T2_SEQ, T2_ARP)
+    tap(PAGE1)
+    uc.mem_write(SEL_TRACK, b"\1")
+    # capture keeps the lowest 3, Erase clears 3 bytes; neighbours untouched
+    keys((71, 1), (60, 1), (64, 1), (67, 1))
+    pad(2)
+    keys()
+    assert tbl(8 + 3, 3) == bytes((60, 64, 67)) and tbl(8, 3) == bytes((40, 255, 255)) and tbl(8 + 6, 3) == bytes((42, 255, 255))
+    held(ERASE, True); pad(3); held(ERASE, False)
+    assert tbl(8 + 6, 3) == b"\xff" * 3 and tbl(8 + 9, 3) == bytes((43, 255, 255))
+    assert played(3) and played(3)[0] != 42, "empty shared pad plays the scale chord"
+    # Shift + 64: shared -> per track (pages 1-3 -> tracks 2-4, page 4 dropped), and back
+    stock.clear(); popups.clear()
+    held(SHIFT, True); tap(PAGE4); held(SHIFT, False)
+    assert not [x for x in stock if x[1] == PAGE4] and popups[-1] == "Pads: per track", (stock, popups)
+    assert tbl(4, 1) == b"\xff" and tbl(8 + 1 * 5, 5) == bytes((60, 64, 67, 255, 255))
+    assert tbl(8 + 16 * 5, 5) == bytes((56, 255, 255, 255, 255)) and tbl(8 + 47 * 5, 5) == bytes((87, 255, 255, 255, 255))
+    assert tbl(248, 8) == b"\xff" * 8
+    assert played(1) == [40], "track 2 = old page 1"
+    combo(T3_SEQ, T3_ARP)
+    assert played(1) == [56], "track 3 = old page 2"
+    stock.clear()
+    tap(PAGE1 + 1)                                               # per-track layout: page buttons stay stock
+    assert ("press", PAGE1 + 1) in stock and ("release", PAGE1 + 1) in stock and played(1) == [56]
+    held(SHIFT, True); tap(PAGE4); held(SHIFT, False)
+    assert tbl(4, 1) == b"\x01" and popups[-1] == "Pads: shared 64\npage 1"
+    assert tbl(8 + 3, 3) == bytes((60, 64, 67)) and tbl(8 + 16 * 3, 3) == bytes((56, 255, 255))
+    assert tbl(8 + 48 * 3, 256 - 8 - 48 * 3) == b"\xff" * (256 - 8 - 48 * 3), "page 4 empty after the round trip"
+    assert played(17 - 16) == [40], "back on page 1"
+    stock.clear()
+    held(SHIFT, True); tap(PAGE1 + 2); held(SHIFT, False)        # Shift + another page button: stock
+    assert ("press", PAGE1 + 2) in stock
+    # step lights follow the page: page 4 holds nothing now -> all 16 white (empty)
+    uc.mem_write(SEL_TRACK, b"\2")
+    tap(PAGE4)
+    assert all(step_light(i)[2] == 5 for i in range(16)), [step_light(i).hex() for i in range(16)]
+    tap(PAGE1)
+    assert step_light(0)[2] != 5 and step_light(2)[2] == 5, "page 1: kept pad lit in the track colour, erased pad white"
+    combo(T3_SEQ, T3_ARP)                                        # pads off: page buttons stock again
+    assert uc.mem_read(STATE + 4, 1) == b"\0"
+    stock.clear(); tap(PAGE1 + 1)
+    assert ("press", PAGE1 + 1) in stock
+    track_key(1, 0, 1, project=proj)
+    combo(T2_SEQ, T2_ARP)
+    stock.clear(); sent.clear()
+
     # channel OFF: pads are taken, nothing sent
     glob(76, 127)
     assert pad(1) == [] and not stock
@@ -651,7 +723,7 @@ def run(path: Path) -> None:
     print("PASS: stock passthrough when off, drum pads (Drum+Seq), Seq alone stock, chord pads (Seq+Arp) "
           "switching drum pads off and back, scale chords (major, minor, Chromatic->major, octave, 7ths), "
           "capture sorted/dedup/5 max/other tracks ignored, Erase+step, Shift+Exit undo/redo of capture and erase (else stock), note offs after mode off, track 3 channel, "
-          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), mod strip lock (Shift + mod strip toggles, pitch bend untouched), chord pads feed the arp in Arp mode (no MIDI, no record, release after mode change, Chord mode ignored for that track only), channel OFF, stack alignment")
+          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), mod strip lock (Shift + mod strip toggles, pitch bend untouched), chord pads feed the arp in Arp mode (no MIDI, no record, release after mode change, Chord mode ignored for that track only), shared 64 pads (page buttons pick 16, all chord tracks, capture lowest 3, Erase, Shift+64 converts both ways, step lights per page, stock outside), channel OFF, stack alignment")
 
 
 def page_bass(chords: list[tuple[int, list[int]]], length: int) -> dict[str, list] | None:

@@ -11,7 +11,8 @@ it valid the tool writes every pattern parameter with the firmware's default
 values (read from the getter, which reports defaults for default patterns).
 
 Chord pads (KSCON build 5+, "pads" in the plan: track -> up to 16 chords): the song's chords on
-that track's step pads, written last, straight to flash. They cannot be read back over SysEx,
+that track's step pads, written last, straight to flash. A plan with "shared" (KSCON build 11+: 64 pads, up to
+3 notes each) writes those instead, and the project uses the shared layout. They cannot be read back over SysEx,
 so only --emulate verifies them; on the device, play them (hold Seq + press Arp on track 2).
 
 Firmware quirk handled: a SysEx commit (cmd 06) flips every pattern's
@@ -194,7 +195,16 @@ def write_project(link: Link, song: dict, log=print) -> list[str]:
     if changed:
         problems.append(f"pattern states differ from target: {changed}")
     link.set_name(proj, display_name(song["title"]))
-    for trk, pads in sorted(song.get("pads", {}).items()):
+    if "shared" in song:   # KSCON build 11+: 64 pads shared by tracks 2-4 instead of per-track pads
+        link.set_shared_pads(proj, song["shared"])
+        if isinstance(link, EmuLink):
+            at = (proj - 1) * 0x20000 + 0x1FEF0
+            want = b"CHD1\x01" + bytes(sum(([*p] + [0xFF] * (3 - len(p)) for p in song["shared"]), [])) \
+                + b"\xff" * 3 * (64 - len(song["shared"]))
+            blk = bytes(link.emu.nor[at:at + 256])
+            if blk[:5] + blk[8:200] != want:
+                problems.append("shared pads in flash differ from the plan")
+    for trk, pads in sorted(song.get("pads", {}).items() if "shared" not in song else []):
         link.set_chord_pads(proj, int(trk), pads)
         if isinstance(link, EmuLink):
             at = (proj - 1) * 0x20000 + 0x1FEF0 + 8 + (int(trk) - 2) * 80

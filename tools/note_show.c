@@ -35,8 +35,9 @@ typedef unsigned int u32;
 #define LEDS_PTR    (*(u8 *volatile *)0x20001490)
 #define TRACK_COLOURS ((volatile u8 *)0x20000058)
 #define PAD         ((u8 *)0xC01EF800)                /* pad state (pad_hooks.S) */
-#define PAD_MAGIC   0x5241445au
-enum { ST_MODE = 4, ST_TAG = 6, ST_NOTE = 16, ST_TABLE = 128, ST_SHIFT = 483, ST_MLOCK = 484, ST_MLDONE = 485 };
+#define PAD_MAGIC   0x5242445au
+enum { ST_MODE = 4, ST_TAG = 6, ST_NOTE = 16, ST_UNDO = 112, ST_TABLE = 128, ST_SHIFT = 483, ST_MLOCK = 484, ST_MLDONE = 485,
+       ST_BANK = 486 };
 
 typedef u32 (*f_chord_flag)(u8 *seq, u32 track, u32 project);                 /* 0802d160 */
 typedef void (*f_ui)(u8 *ui, u32 what);                                       /* 0801f96c */
@@ -259,6 +260,21 @@ static u32 ns_mask(const u8 *notes, u32 n)
     return m;
 }
 
+/* stored notes of chord pad `pad` (0-15) of track t (1-3) in the loaded table, 0 when the table is
+ * not the current project's; *n = notes per pad. Shared layout (block byte 4 = 1): pad bank*16 + pad
+ * of 64 x 3 notes for every track, else the track's own 16 x 5 (chord_slot in pad_hooks.S). */
+static const u8 *pk_kept(u32 t, u32 pad, u32 *n)
+{
+    const u8 *b = PAD + ST_TABLE;
+    if (PAD[ST_TAG] != CUR_PROJECT) return 0;
+    if (b[4] == 1) {
+        *n = 3;
+        return b + 8 + ((PAD[ST_BANK] & 3) * 16 + pad) * 3;
+    }
+    *n = 5;
+    return b + 8 + ((t - 1) * 16 + pad) * 5;
+}
+
 /* pads of chord-pad track t (1-3) whose chord has the same notes (any octave) as the keys held */
 static u32 ns_match(struct ns_lights *ls, u32 t, f_scale_chord scale_chord)
 {
@@ -266,17 +282,20 @@ static u32 ns_match(struct ns_lights *ls, u32 t, f_scale_chord scale_chord)
     u32 held = ns_mask(notes, ns_held(t, notes));
     if (!held || !(held & (held - 1))) return 0;            /* nothing or one note: no chord */
     u32 p = CUR_PROJECT;
-    const u8 *kept = PAD[ST_TAG] == p ? PAD + ST_TABLE + 8 + (t - 1) * 80 : 0;
-    u32 sum = 0;
-    if (kept)
-        for (u32 i = 0; i < 80; i++) sum = sum * 31 + kept[i];
+    u32 sum = PAD[ST_TABLE + 4] * 7 + PAD[ST_BANK], n;
+    for (u32 pad = 0; pad < 16; pad++) {
+        const u8 *k = pk_kept(t, pad, &n);
+        if (k)
+            for (u32 i = 0; i < n; i++) sum = sum * 31 + k[i];
+    }
     if (held == ls->held_mask && t == ls->key_track && p == ls->key_project && sum == ls->key_sum)
         return ls->match;
     u32 match = 0;
     for (u32 pad = 0; pad < 16; pad++) {
         u32 m;
-        if (kept && kept[pad * 5] <= 127) {
-            m = ns_mask(kept + pad * 5, 5);
+        const u8 *kept = pk_kept(t, pad, &n);
+        if (kept && kept[0] <= 127) {
+            m = ns_mask(kept, n);
         } else {
             u8 sc[8];
             m = ns_mask(sc, scale_chord(t, pad, sc));
@@ -325,8 +344,9 @@ void ns_leds(u8 *leds, f_scale_chord scale_chord)
     u32 t = mode == 1 ? 0 : mode < 5 ? mode - 1 : mode - 5;
     u8 colour = TRACK_COLOURS[t] & 0xf;
     u32 match = mode >= 2 && mode <= 4 ? ns_match(ls, t, scale_chord) : 0;
-    const u8 *kept = mode >= 2 && mode <= 4 && PAD[ST_TAG] == CUR_PROJECT ? PAD + ST_TABLE + 8 + (t - 1) * 80 : 0;
     for (u32 i = 0; i < 16; i++) {
+        u32 n;
+        const u8 *kept = mode >= 2 && mode <= 4 ? pk_kept(t, i, &n) : 0;
         const u8 *e = leds + 0x1c + (0x35 + i) * 3;
         u8 cur[3] = {e[0], e[1], (u8)(e[2] & 0xf)};
         if (!ls->active || cur[0] != ls->mine[i][0] || cur[1] != ls->mine[i][1] || cur[2] != ls->mine[i][2])
@@ -336,13 +356,49 @@ void ns_leds(u8 *leds, f_scale_chord scale_chord)
             v[1] = 0, v[2] = 5;                                         /* held */
         } else if (match >> i & 1) {
             v[1] = 0;                                                   /* the chord on the keys */
-        } else if (mode >= 2 && mode <= 4 && !(kept && kept[i * 5] <= 127)) {
+        } else if (mode >= 2 && mode <= 4 && !(kept && kept[0] <= 127)) {
             v[2] = 5;                                                   /* empty chord pad */
         }
         ns_led_put(leds, i, v);
         for (u32 k = 0; k < 3; k++) ls->mine[i][k] = v[k];
     }
     ls->active = 1;
+}
+
+/* Shared pads (build 11). In chord pad mode Shift + 64 switches the project between per-track pads
+ * (tracks 2-4 x 16 x 5 notes) and 64 pads shared by tracks 2-4 (x 3 notes; a page button picks the 16 the
+ * steps play), converting in the loaded table: track 2-4's pads become pages 1-3 (notes past the 3rd
+ * dropped, page 4 empty), and back. Kept like a captured chord: Save Project writes it. */
+void pl_toggle(void)
+{
+    u8 *b = PAD + ST_TABLE;
+    if (b[4] == 1) {
+        for (int q = 47; q >= 0; q--) {
+            for (int k = 2; k >= 0; k--) b[8 + q * 5 + k] = b[8 + q * 3 + k];
+            b[8 + q * 5 + 3] = b[8 + q * 5 + 4] = 0xFF;
+        }
+        for (u32 i = 8 + 48 * 5; i < 256; i++) b[i] = 0xFF;
+        b[4] = 0xFF;
+    } else {
+        for (u32 q = 0; q < 48; q++)
+            for (u32 k = 0; k < 3; k++) b[8 + q * 3 + k] = b[8 + q * 5 + k];
+        for (u32 i = 8 + 48 * 3; i < 256; i++) b[i] = 0xFF;
+        b[4] = 1;
+    }
+    PAD[ST_BANK] = 0;
+    PAD[ST_UNDO] = 0;
+    *ns_put(ns_put(TEXT, "Pads: "), b[4] == 1 ? "shared 64\npage 1" : "per track") = 0;
+    ns_popup();
+}
+
+void pl_bank(u32 bank)
+{
+    PAD[ST_BANK] = (u8)bank;
+    PAD[ST_UNDO] = 0;
+    char *d = ns_put(TEXT, "Pads ");
+    static const char range[4][6] = {"1-16", "17-32", "33-48", "49-64"};
+    *ns_put(ns_put(d, range[bank & 3]), "\nshared") = 0;
+    ns_popup();
 }
 
 /* Mod strip lock (strip_hook in pad_hooks.S, for each mod strip value change): 1 = drop it.

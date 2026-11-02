@@ -91,12 +91,15 @@
                                     @ (ends 0x1feec) and the name (0x1fff0)
 .equ CHORD_SECTOR_OFF, 0xfef0
 .equ CHORD_MAGIC,   0x31444843      @ "CHD1"
-.equ CHORD_NOTES,   5
+.equ CHORD_NOTES,   5               @ per pad in the per-track layout
+.equ SHARED_NOTES,  3               @ per pad in the shared layout
+.equ LAYOUT_SHARED, 1               @ block byte 4: 1 = 64 pads shared by tracks 2-4, else per track
+.equ ID_PAGE1,      0x3f            @ page buttons 16/32/48/64: 0x3f-0x42
 
 @ state in external RAM, in a stretch no stock code references (below the
 @ save staging buffer at 0xC01F0000); not cleared at boot, so it carries a magic
 .equ PAD_STATE,     0xC01EF800
-.equ PAD_MAGIC,     0x5241445a      @ "ZDAR" (v10 layout)
+.equ PAD_MAGIC,     0x5242445a      @ "ZDBR" (v11 layout: + ST_BANK)
 .equ ST_MODE,       4               @ 0 off, 1 drum pads, 2-4 chord pads for track 2-4,
                                     @ 5-8 root chords for track 1-4
 .equ CT_MODE,       5
@@ -114,8 +117,10 @@
 .equ ST_SHIFT,      483             @ mod strip lock (note_show.c ml_strip): 1 while Shift is held
 .equ ST_MLOCK,      484             @ 1 = mod strip locked
 .equ ST_MLDONE,     485             @ 1 = toggled during this Shift hold
+.equ ST_BANK,       486             @ shared layout: page 0-3 the 16 steps play (page buttons)
 .equ ST_TABLE,      128             @ 256: copy of the project's chord block (flash layout):
-                                    @ magic, 4 spare, then track 2-4 x 16 pads x 5 notes, 0xff unused
+                                    @ magic, layout byte, 3 spare, then track 2-4 x 16 pads x 5 notes,
+                                    @ or (layout 1) 64 shared pads x 3 notes; 0xff unused
 .equ PAD_NONE,      0xff
 .equ PAD_SILENT,    0xfe
 .equ PAD_ARP,       0x80            @ in ST_CHAN: the pad's notes went to its track's arp (pa_note)
@@ -139,6 +144,7 @@ pad_state:
     strb    r0, [r7, #ST_SHIFT]
     strb    r0, [r7, #ST_MLOCK]
     strb    r0, [r7, #ST_MLDONE]
+    strb    r0, [r7, #ST_BANK]
     movs    r0, #0xff
     strb    r0, [r7, #ST_TAG]
     strb    r0, [r7, #ST_BT]
@@ -195,10 +201,20 @@ chords_load:
 2:  pop     {r4, pc}
 .size chords_load, .-chords_load
 
-@ r0 = track 1-3, r1 = pad -> r0 = address of the pad's 5 stored notes (r7 = state)
+@ r0 = track 1-3, r1 = pad 0-15 -> r0 = address of the pad's stored notes (r7 = state, table loaded):
+@ the track's own pad (5 notes), or in the shared layout pad bank*16 + pad of the 64 (3 notes)
 .type chord_slot,%function
 chord_slot:
-    subs    r0, #1
+    ldrb    r2, [r7, #ST_TABLE + 4]
+    cmp     r2, #LAYOUT_SHARED
+    bne     1f
+    ldrb    r2, [r7, #ST_BANK]
+    add     r1, r1, r2, lsl #4
+    add     r1, r1, r1, lsl #1      @ x3
+    add     r0, r7, r1
+    adds    r0, #ST_TABLE + 8
+    bx      lr
+1:  subs    r0, #1
     lsls    r2, r0, #4
     add     r2, r2, r1              @ track*16 + pad
     add     r2, r2, r2, lsl #2      @ x5
@@ -207,6 +223,15 @@ chord_slot:
     bx      lr
 .size chord_slot, .-chord_slot
 
+@ reg <- notes per pad of the loaded table (r7 = state); sets flags
+.macro pad_count reg
+    ldrb    \reg, [r7, #ST_TABLE + 4]
+    cmp     \reg, #LAYOUT_SHARED
+    ite     eq
+    moveq   \reg, #SHARED_NOTES
+    movne   \reg, #CHORD_NOTES
+.endm
+
 @ r0 = slot, r8 = track, r9 = pad, r7 = state: remember the slot before it changes
 .type undo_keep,%function
 undo_keep:
@@ -214,12 +239,13 @@ undo_keep:
     strb    r1, [r7, #ST_UNDO]
     strb    r8, [r7, #ST_UNDO + 1]
     strb    r9, [r7, #ST_UNDO + 2]
+    pad_count r12
     movs    r2, #0
 1:  ldrb    r1, [r0, r2]
     add     r3, r7, r2
     strb    r1, [r3, #ST_UNDO + 3]
     adds    r2, #1
-    cmp     r2, #CHORD_NOTES
+    cmp     r2, r12
     blo     1b
     bx      lr
 .size undo_keep, .-undo_keep
@@ -496,6 +522,39 @@ bass_run:
     bl      bass_go
     pop     {r3-r11, pc}
 8:
+    @ chord pad mode: Shift + 64 switches the project between per-track and shared pads (pl_toggle),
+    @ a page button picks the 16 pads the steps play in the shared layout (pl_bank); else stock
+    subs    r9, r5, #ID_PAGE1
+    cmp     r9, #3
+    bhi     80f
+    ldrb    r0, [r7, #ST_MODE]
+    subs    r0, #2
+    cmp     r0, #2
+    bhi     80f
+    bl      chords_load
+    mov     r0, r4
+    movs    r1, #ID_SHIFT
+    bl      is_held
+    cbz     r0, 81f
+    cmp     r9, #3
+    bne     80f
+    bl      pl_toggle
+    b       82f
+81: ldrb    r0, [r7, #ST_TABLE + 4]
+    cmp     r0, #LAYOUT_SHARED
+    bne     80f
+    mov     r0, r9
+    bl      pl_bank
+82: strb    r5, [r7, #ST_SW]        @ its release is taken too
+    ldr     r4, =LEDS_PTR           @ the step lights show the new pads now (as led_flush)
+    ldr     r4, [r4]
+    mov     r0, r4
+    adr     r1, chord_notes + 1
+    bl      ns_leds
+    mov     r0, r4
+    call_abs LED_FLUSH
+    pop     {r3-r11, pc}
+80:
     @ toggles: Seq (0x14) with Drum held -> mode 1; Arp (0x1b/0x21/0x27) with its Seq held -> mode 2-4
     cmp     r5, #0x14
     bne     1f
@@ -567,6 +626,7 @@ press_step:
     ldrb    r0, [r7, #ST_UNDO + 1]
     ldrb    r1, [r7, #ST_UNDO + 2]
     bl      chord_slot
+    pad_count r6
     movs    r2, #0                  @ swap: a second undo puts the change back
 1:  ldrb    r1, [r0, r2]
     add     r3, r7, r2
@@ -574,7 +634,7 @@ press_step:
     strb    r1, [r3, #ST_UNDO + 3]
     strb    r12, [r0, r2]
     adds    r2, #1
-    cmp     r2, #CHORD_NOTES
+    cmp     r2, r6
     blo     1b
     strb    r5, [r7, #ST_SW]
     pop     {r3-r11, pc}
@@ -628,11 +688,12 @@ press_chord:
     mov     r6, r0
     bl      undo_keep
     mov     r0, r6
+    pad_count r3
     movs    r1, #0xff
     movs    r2, #0
 1:  strb    r1, [r0, r2]
     adds    r2, #1
-    cmp     r2, #CHORD_NOTES
+    cmp     r2, r3
     blo     1b
     b       press_done
 2:  @ keys held on this track: the pad keeps them (lowest first, up to 5)
@@ -689,6 +750,7 @@ press_chord:
     bl      oct_shift
     mov     r12, r0                 @ kept as played at octave 0
     mov     r3, r11
+    pad_count r4                    @ the lowest 3 in the shared layout (buttons pointer not needed)
     movs    r2, #0                  @ store the capture; it sounds already on the keys
 6:  cmp     r2, r3
     bhs     61f
@@ -698,7 +760,7 @@ press_chord:
 61: movs    r0, #0xff
 62: strb    r0, [r6, r2]
     adds    r2, #1
-    cmp     r2, #CHORD_NOTES
+    cmp     r2, r4
     blo     6b
     add     sp, #8
     b       press_done
@@ -715,6 +777,7 @@ press_chord:
     mov     r0, r8                  @ stored chord -> sounding list, moved with the octave
     bl      oct_shift
     mov     r12, r0
+    pad_count r4                    @ (buttons pointer not needed any more)
     movs    r2, #0                  @ read
     movs    r3, #0                  @ written
 71: ldrb    r0, [r6, r2]
@@ -727,7 +790,7 @@ press_chord:
     strb    r0, [r1, #ST_NOTE]
     adds    r3, #1
 72: adds    r2, #1
-    cmp     r2, #CHORD_NOTES
+    cmp     r2, r4
     blo     71b
     cmp     r3, #0                  @ nothing in range: stays taken silently
     beq     press_done
@@ -1265,24 +1328,38 @@ fit_keys:
 9:  pop     {r4-r6, pc}
 .size fit_keys, .-fit_keys
 
-@ SysEx bulk SET item 0x78 (project), param 0x7d, one index = track 2-4 (1-3), 80 bytes:
-@ the track's 16 chord pads x 5 notes, 0x7f = unused. Called from setname_hook with
+@ SysEx bulk SET item 0x78 (project), param 0x7d, one index: track 2-4 (1-3), 80 bytes = the track's
+@ 16 chord pads x 5 notes, and the project uses per-track pads; or shared page 1-4 (4-7), 48 bytes =
+@ 16 of the 64 shared pads x 3 notes, and the project uses shared pads (write all 4 pages: the rest of
+@ the block is read the new way). 0x7f = unused. Called from setname_hook with
 @ r0 = message, r1 = data, r2 = length. Writes the track's part of the project's chord block
 @ in flash (an empty block first if the project has none) and drops the RAM copy.
 .equ CS_BUF,        PAD_STATE + 0x200   @ make bass scratch, free outside the combo
 .type chord_set,%function
 chord_set:
-    push    {r4-r7, lr}
-    sub     sp, #12
-    cmp     r2, #80
-    bne     9f
+    push    {r4-r8, lr}
+    sub     sp, #8                  @ 32 bytes: sp stays 8-byte aligned
     ldrb    r4, [r0, #2]            @ normalized slot 0..15
     cmp     r4, #15
     bhi     9f
-    ldrb    r5, [r0, #4]            @ index, 0-based: 0..2 = track 2-4
-    cmp     r5, #2
+    ldrb    r5, [r0, #4]            @ index, 0-based: 0..2 = track 2-4, 3..6 = shared page 1-4
+    cmp     r5, #6
     bhi     9f
+    movs    r7, #80                 @ r7 = bytes, r8 = offset in the block, r3 = layout byte
+    movs    r3, #0xff
+    subs    r0, r5, #3
+    bmi     1f
+    movs    r7, #48
+    movs    r3, #LAYOUT_SHARED
+    mov     r5, r0
+1:  cmp     r2, r7
+    bne     9f
+    mul     r8, r5, r7
+    add     r8, r8, #8
     ldr     r6, =CS_BUF
+    strb    r3, [r6, #340]          @ the layout halfword: byte 4, byte 5 spare
+    movs    r3, #0xff
+    strb    r3, [r6, #341]
     movs    r2, #0
 1:  ldrb    r3, [r1, r2]
     cmp     r3, #0x7f
@@ -1290,7 +1367,7 @@ chord_set:
     movs    r3, #PAD_NONE
 2:  strb    r3, [r6, r2]
     adds    r2, #1
-    cmp     r2, #80
+    cmp     r2, r7
     blo     1b
 
     lsl     r1, r4, #17
@@ -1321,12 +1398,17 @@ chord_set:
 4:  ldr     r0, =STAGE_BASE
     str     r0, [sp]
     movs    r0, #0
-    movs    r1, #80
-    muls    r1, r5, r1
-    movw    r2, #(CHORD_SECTOR_OFF + 8)
-    add     r1, r1, r2
+    movw    r1, #CHORD_SECTOR_OFF
+    add     r1, r1, r8
     mov     r2, r6
-    movs    r3, #40                 @ halfwords
+    lsrs    r3, r7, #1              @ halfwords
+    call_abs STAGE_WRITE
+    ldr     r0, =STAGE_BASE
+    str     r0, [sp]
+    movs    r0, #0
+    movw    r1, #(CHORD_SECTOR_OFF + 4)
+    add     r2, r6, #340
+    movs    r3, #1
     call_abs STAGE_WRITE
 
     lsl     r1, r4, #17
@@ -1346,8 +1428,8 @@ chord_set:
     strb    r1, [r0, #ST_TAG]
     movs    r1, #0
     strb    r1, [r0, #ST_UNDO]
-9:  add     sp, #12
-    pop     {r4-r7, pc}
+9:  add     sp, #8
+    pop     {r4-r8, pc}
 .size chord_set, .-chord_set
 .ltorg
 
