@@ -824,9 +824,14 @@ def shared_build12(uc, start, target, event, held, tap, combo, glob, track_key, 
     assert key("up", 3) == ([], "stock"), "the first key's release is stock now"
     assert notes_off(key("up", 4)[0]) == [64]
     # 2 s without a step press: from pad 1 again
-    key("down", 2); key("up", 2)                                 # pad 3 (68)
-    uc.mem_write(TICK, (1000 + 5000).to_bytes(4, "little"))
-    assert notes_on(key("down", 2)[0]) == [64], "restart after a pause"
+    uc.mem_write(TICK, (1000 + 5000).to_bytes(4, "little"))     # 0.5 s later (the tick is 0.1 ms): keeps going
+    assert notes_on(key("down", 2)[0]) == [68], "a normal gap between steps"
+    key("up", 2)
+    uc.mem_write(TICK, (1000 + 5000 + 19000).to_bytes(4, "little"))
+    assert notes_on(key("down", 2)[0]) == [71, 75, 78], "1.9 s: still going"
+    key("up", 2)
+    uc.mem_write(TICK, (1000 + 5000 + 19000 + 21000).to_bytes(4, "little"))
+    assert notes_on(key("down", 2)[0]) == [64], "restart after 2 s"
     key("up", 2)
     # without Shift: stock
     event("release", SHIFT)

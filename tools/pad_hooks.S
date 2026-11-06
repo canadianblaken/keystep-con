@@ -129,7 +129,7 @@
 .equ ST_MLDONE,     485             @ 1 = toggled during this Shift hold
 .equ ST_BANK,       486             @ shared layout: page 0-3 the 16 steps play (page buttons)
 .equ ST_STEP,       487             @ step play: next shared pad 0-63
-.equ ST_STIME,      488             @ step play: tick (ms) of the last step press, u32
+.equ ST_STIME,      488             @ step play: HAL tick (0.1 ms) of the last step press, u32
 .equ ST_SKEY,       492             @ step play: key slot 0-36 sounding a pad, 0xff none
 .equ ST_SPAD,       493             @ step play: the step button 0-15 its notes are kept under
 .equ ST_NOCAP,      494             @ 1 while step play presses a pad: never capture held keys

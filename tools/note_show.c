@@ -38,7 +38,8 @@ typedef unsigned int u32;
 #define PAD_MAGIC   0x5243445au
 enum { ST_MODE = 4, ST_TAG = 6, ST_NOTE = 16, ST_UNDO = 112, ST_TABLE = 128, ST_SHIFT = 483, ST_MLOCK = 484, ST_MLDONE = 485,
        ST_BANK = 486, ST_STEP = 487, ST_STIME = 488 };
-#define TICK        (*(volatile u32 *)0x20006218)     /* HAL tick, ms (SysTick 0803d124 -> 0803e428) */
+#define TICK        (*(volatile u32 *)0x20006218)     /* HAL tick, 0.1 ms (SysTick 0803d124 -> 0803e428; stock divides by 10) */
+#define TICKS_2S    20000
 #define SEL_TRACK   (*(volatile u8 *)0x200001a4)
 #define DISPLAY     (*(u8 *volatile *)0x200014a0)
 
@@ -510,7 +511,7 @@ u32 sp_next(u32 slot)
     u8 *b = PAD + ST_TABLE;
     if (b[4] != 1 || b[5] != 1) return 0x100;
     u32 now = TICK, *last = (u32 *)(PAD + ST_STIME);
-    if (now - *last > 2000) PAD[ST_STEP] = 0;
+    if (now - *last > TICKS_2S) PAD[ST_STEP] = 0;
     *last = now;
     u32 q = PAD[ST_STEP] & 63;
     for (u32 k = 0; k < 64; k++, q = (q + 1) & 63) {
