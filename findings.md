@@ -326,7 +326,7 @@ Control test: MIDI channels (globals) and recorded steps survive save + power cy
 - SysEx 0x7D indices 4-7 (0-based 3-6) = shared page 1-4, 48 bytes; they set byte 4 = 1. Indices 1-3 (80 bytes) set byte 4 = 0xff. `ksp_link.set_shared_pads` writes all four pages; `ksp_setlist.py` writes a plan's `shared` list instead of per-track pads.
 - To check on hardware: Shift + 64 in chord pad mode switches and converts, page buttons pick the 16 (screen + step lights), pattern page/length untouched, Shift + 16/32/48 still extends the pattern, page buttons stock with pads off, Save Project keeps the layout across power cycles, SysEx pages write.
 
-### Octave buttons move shared pads (build 14, 2026-11-06; emulator-tested, not yet on hardware)
+### Octave buttons move shared pads (build 14, 2026-11-06; confirmed on hardware 2026-11-06)
 - Build 13 confirmed on hardware 2026-11-06 (identity b13; step play works).
 - Shared layout: `oct_shift` now calls `po_shift(track)` (note_show.c): ST_LOCT (500, 3 bytes, 0xff none) keeps the keyboard octave last seen per track 2-4; a different octave at the next pad press was the octave buttons (or any stock octave change) and adds the difference to ST_POFF (496, 3 x s8, clamped -4..+4). Pads play and capture stored + 12 * offset. `oc_follow` records its own moves in ST_LOCT, so the follow never changes the offset. Both reset on project change (`chords_load`) and power-up. No octave button hook needed. PAD_MAGIC "ZDCS" (v14).
 - To check on hardware: octave up then a pad plays an octave higher and the keyboard stays; the follow moving down does not undo it; octave down returns to the stored notes; step play shifts the same way; project change resets.
