@@ -11,8 +11,15 @@
 @   - a step with no chord plays the scale chord of the track's current root and scale:
 @     steps 1-8 triads on degrees 1-8, steps 9-16 7th chords on degrees 1-8, rooted in the
 @     keyboard's lowest octave (Chromatic counts as major; User 1/2 from the project)
-@   - a kept chord moves with the octave buttons (kept as played at octave 0)
+@   - a kept chord moves with the octave buttons (kept as played at octave 0); not in the shared layout
 @   - Save Project stores the chords with the project (5 notes per step, 3 tracks x 16 steps)
+@ Shared pads (one project-wide set of 64 shared by tracks 2-4, Shift + 64): they play the notes as
+@ stored, whatever the octave; when a pad's notes are off the 37 keys shown, the keyboard octave of
+@ its track moves (fewest octaves) so they are on the keys (oc_follow, note_show.c).
+@ Step play (shared layout, Shift + 48 in chord pad mode, kept with the project like the layout):
+@ Shift + any key plays the next shared pad that has notes, from pad 1 on, 64 wraps to 1; the key
+@ itself does nothing else (its stock Shift function is skipped) and the pad sounds until the key is
+@ let go. After 2 s without a step press it starts again from pad 1. Keys without Shift are stock.
 @ Hold Seq, press Mute on any track: root chords for that track. Keys on that track are silent
 @ and only pick the root (the lowest one held when a step is pressed; it stays after the key is
 @ let go); steps play chords on that root,
@@ -80,6 +87,9 @@
 .equ CUR_PAT,       0x20004da8      @ current pattern per track
 .equ SCALE_MASKS,   0x20000004      @ u16 per scale index, bit n = semitone n above the root
 .equ HELD_KEYS,     0x20004ddc
+.equ BUTTONS_PTR,   0x200014b8      @ -> the buttons object the press/release handlers get
+.equ SEL_GET,       0x0802ab0c      @ (seq): called first by the key press (event 10) and release (9)
+.equ LOOP_NEXT,     0x08012358      @ the event loop's next message (only fp and sp live)
 .equ KEY_MAP,       0x20000674      @ per track 128 bytes: key note -> note played (scale map)
 .equ PAD_VELOCITY,  100
 .equ ID_ERASE,      0x10
@@ -99,7 +109,7 @@
 @ state in external RAM, in a stretch no stock code references (below the
 @ save staging buffer at 0xC01F0000); not cleared at boot, so it carries a magic
 .equ PAD_STATE,     0xC01EF800
-.equ PAD_MAGIC,     0x5242445a      @ "ZDBR" (v11 layout: + ST_BANK)
+.equ PAD_MAGIC,     0x5243445a      @ "ZDCR" (v12 layout: + step play)
 .equ ST_MODE,       4               @ 0 off, 1 drum pads, 2-4 chord pads for track 2-4,
                                     @ 5-8 root chords for track 1-4
 .equ CT_MODE,       5
@@ -118,8 +128,13 @@
 .equ ST_MLOCK,      484             @ 1 = mod strip locked
 .equ ST_MLDONE,     485             @ 1 = toggled during this Shift hold
 .equ ST_BANK,       486             @ shared layout: page 0-3 the 16 steps play (page buttons)
+.equ ST_STEP,       487             @ step play: next shared pad 0-63
+.equ ST_STIME,      488             @ step play: tick (ms) of the last step press, u32
+.equ ST_SKEY,       492             @ step play: key slot 0-36 sounding a pad, 0xff none
+.equ ST_SPAD,       493             @ step play: the step button 0-15 its notes are kept under
+.equ ST_NOCAP,      494             @ 1 while step play presses a pad: never capture held keys
 .equ ST_TABLE,      128             @ 256: copy of the project's chord block (flash layout):
-                                    @ magic, layout byte, 3 spare, then track 2-4 x 16 pads x 5 notes,
+                                    @ magic, layout byte, step play byte (1 on), 2 spare, then track 2-4 x 16 pads x 5 notes,
                                     @ or (layout 1) 64 shared pads x 3 notes; 0xff unused
 .equ PAD_NONE,      0xff
 .equ PAD_SILENT,    0xfe
@@ -145,9 +160,13 @@ pad_state:
     strb    r0, [r7, #ST_MLOCK]
     strb    r0, [r7, #ST_MLDONE]
     strb    r0, [r7, #ST_BANK]
+    strb    r0, [r7, #ST_STEP]
+    strb    r0, [r7, #ST_NOCAP]
+    str     r0, [r7, #ST_STIME]
     movs    r0, #0xff
     strb    r0, [r7, #ST_TAG]
     strb    r0, [r7, #ST_BT]
+    strb    r0, [r7, #ST_SKEY]
     movs    r2, #0
 2:  adds    r3, r7, r2
     strb    r0, [r3, #ST_NOTE]
@@ -179,6 +198,7 @@ chords_load:
     beq     2f
     movs    r0, #0
     strb    r0, [r7, #ST_UNDO]      @ another project: nothing to undo
+    strb    r0, [r7, #ST_STEP]      @ and step play starts from pad 1
     ldr     r0, =FLASH_CTX
     ldr     r1, =CHORD_FLASH
     add     r1, r1, r4, lsl #17
@@ -251,9 +271,16 @@ undo_keep:
 .size undo_keep, .-undo_keep
 
 @ r0 = track 0-3 -> r0 = (keyboard octave - octave 0) * 12: stored pad chords are kept as played
-@ at octave 0 (the default) and move with the octave buttons. Uses r0-r3 only.
+@ at octave 0 (the default) and move with the octave buttons; shared pads play as stored (0; the
+@ octave follows them instead, oc_follow). Uses r0-r3 only.
 .type oct_shift,%function
 oct_shift:
+    ldr     r1, =PAD_STATE
+    ldrb    r1, [r1, #ST_TABLE + 4]
+    cmp     r1, #LAYOUT_SHARED
+    itt     eq
+    moveq   r0, #0
+    bxeq    lr
     ldr     r1, =SEQ_PTR
     ldr     r1, [r1]
     ldr     r2, =CUR_PROJECT
@@ -461,6 +488,7 @@ rec_on:
 .global pad_press
 .type pad_press,%function
 pad_press:
+pp_entry:                           @ local name for calls from the step play hook
     push    {r3-r11, lr}            @ 40 bytes: sp stays 8-byte aligned
     mov     r4, r0
     mov     r5, r1
@@ -537,8 +565,15 @@ bass_run:
     bl      is_held
     cbz     r0, 81f
     cmp     r9, #3
+    beq     83f
+    cmp     r9, #2                  @ Shift + 48 in the shared layout: step play on/off (sp_toggle)
     bne     80f
-    bl      pl_toggle
+    ldrb    r0, [r7, #ST_TABLE + 4]
+    cmp     r0, #LAYOUT_SHARED
+    bne     80f
+    bl      sp_toggle
+    b       82f
+83: bl      pl_toggle
     b       82f
 81: ldrb    r0, [r7, #ST_TABLE + 4]
     cmp     r0, #LAYOUT_SHARED
@@ -702,6 +737,9 @@ press_chord:
     bl      chord_slot
     mov     r6, r0                  @ r6 = slot (the stock press args are no longer needed)
     sub     sp, #8
+    ldrb    r0, [r7, #ST_NOCAP]     @ a step play press only plays
+    cmp     r0, #0
+    bne     7f
     movs    r3, #0                  @ count
     movs    r2, #0                  @ key
 3:  add     r1, r2, r2, lsl #1
@@ -816,6 +854,9 @@ press_root:
     cmp     r0, #0
     beq     press_done
 press_send:
+    mov     r0, r8                  @ shared pads: the keyboard octave follows (keys light right)
+    add     r1, r10, #ST_NOTE
+    bl      oc_follow
     ldrb    r0, [r7, #ST_MODE]      @ chord and root-chord pads on a track in Arp mode feed its arp
     cmp     r0, #1
     beq     1f
@@ -905,6 +946,7 @@ press_stock:
 .global pad_release
 .type pad_release,%function
 pad_release:
+pr_entry:
     push    {r3-r11, lr}
     mov     r4, r0
     mov     r5, r1
@@ -1116,6 +1158,101 @@ key_rec:
     ldr     r12, =(STOCK_KEY_REC + 1)
     bx      r12
 .size key_rec, .-key_rec
+
+@ Step play. Every key press (event 10, bl at 0801535e) and release (event 9, bl at 08015094) starts
+@ with bl 0802ab0c (r0 = *seq); [sp + 0x6a] is the key. key_down: with Shift held, chord pads on and
+@ step play on in the shared layout, sp_next (note_show.c) picks the pad and the key is taken: the
+@ pad is pressed as a step button would be (no capture), its page shown, and the event ends (the
+@ loop's next message). key_up: the key sounding a pad lets it go the same way.
+.global key_down
+.type key_down,%function
+key_down:
+    push    {r0, r4-r7, lr}
+    ldrb    r4, [sp, #24 + KEY_SLOT_SP]
+    bl      pad_state
+    ldrb    r0, [r7, #ST_SHIFT]
+    cmp     r0, #0
+    beq     9f
+    ldrb    r0, [r7, #ST_MODE]
+    subs    r0, #2
+    cmp     r0, #2
+    bhi     9f
+    bl      chords_load
+    mov     r0, r4
+    bl      sp_next
+    cmp     r0, #0x100
+    beq     9f
+    mov     r5, r0                  @ r5 = shared pad 0-63, 0xff none
+    ldrb    r0, [r7, #ST_SKEY]      @ a step still sounding (its key not let go yet) stops first
+    cmp     r0, #0xff
+    beq     1f
+    movs    r0, #0xff
+    strb    r0, [r7, #ST_SKEY]
+    ldr     r0, =BUTTONS_PTR
+    ldr     r0, [r0]
+    ldrb    r1, [r7, #ST_SPAD]
+    adds    r1, #0x2e
+    bl      pr_entry
+1:  cmp     r5, #0xff
+    beq     8f
+    strb    r4, [r7, #ST_SKEY]
+    and     r1, r5, #15
+    strb    r1, [r7, #ST_SPAD]
+    lsrs    r0, r5, #4
+    strb    r0, [r7, #ST_BANK]
+    movs    r0, #1
+    strb    r0, [r7, #ST_NOCAP]
+    ldr     r0, =BUTTONS_PTR
+    ldr     r0, [r0]
+    adds    r1, #0x2e
+    movs    r2, #1
+    bl      pp_entry
+    movs    r0, #0
+    strb    r0, [r7, #ST_NOCAP]
+    ldr     r4, =LEDS_PTR           @ the step lights show the step's page
+    ldr     r4, [r4]
+    mov     r0, r4
+    adr     r1, chord_notes + 1
+    bl      ns_leds
+    mov     r0, r4
+    call_abs LED_FLUSH
+8:  add     sp, #4
+    pop     {r4-r7, lr}
+    ldr     r12, =(LOOP_NEXT + 1)
+    bx      r12
+9:  pop     {r0, r4-r7, lr}
+    ldr     r12, =(SEL_GET + 1)
+    bx      r12
+.size key_down, .-key_down
+
+.global key_up
+.type key_up,%function
+key_up:
+    push    {r0, r4-r7, lr}
+    ldrb    r4, [sp, #24 + KEY_SLOT_SP]
+    ldr     r7, =PAD_STATE
+    ldr     r0, [r7]
+    ldr     r1, =PAD_MAGIC
+    cmp     r0, r1
+    bne     9f
+    ldrb    r0, [r7, #ST_SKEY]
+    cmp     r0, r4
+    bne     9f
+    movs    r0, #0xff
+    strb    r0, [r7, #ST_SKEY]
+    ldr     r0, =BUTTONS_PTR
+    ldr     r0, [r0]
+    ldrb    r1, [r7, #ST_SPAD]
+    adds    r1, #0x2e
+    bl      pr_entry
+    add     sp, #4
+    pop     {r4-r7, lr}
+    ldr     r12, =(LOOP_NEXT + 1)
+    bx      r12
+9:  pop     {r0, r4-r7, lr}
+    ldr     r12, =(SEL_GET + 1)
+    bx      r12
+.size key_up, .-key_up
 
 @ every LED send (bl 08054c2c, 7 callers; r0 = the LED object): the step lights show the pads first
 @ while a pad mode is on (note_show.c ns_leds, given chord_notes for the scale chords)
@@ -1357,7 +1494,7 @@ chord_set:
     mul     r8, r5, r7
     add     r8, r8, #8
     ldr     r6, =CS_BUF
-    strb    r3, [r6, #340]          @ the layout halfword: byte 4, byte 5 spare
+    strb    r3, [r6, #340]          @ the layout halfword: byte 4, byte 5 = step play (kept, below)
     movs    r3, #0xff
     strb    r3, [r6, #341]
     movs    r2, #0
@@ -1395,7 +1532,10 @@ chord_set:
     movw    r1, #CHORD_SECTOR_OFF
     movs    r3, #128                @ halfwords
     call_abs STAGE_WRITE
-4:  ldr     r0, =STAGE_BASE
+4:  ldr     r0, =(STAGE_BASE + CHORD_SECTOR_OFF + 5)
+    ldrb    r0, [r0]                @ byte 5 (step play) stays as it is
+    strb    r0, [r6, #341]
+    ldr     r0, =STAGE_BASE
     str     r0, [sp]
     movs    r0, #0
     movw    r1, #CHORD_SECTOR_OFF

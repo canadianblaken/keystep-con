@@ -35,9 +35,12 @@ typedef unsigned int u32;
 #define LEDS_PTR    (*(u8 *volatile *)0x20001490)
 #define TRACK_COLOURS ((volatile u8 *)0x20000058)
 #define PAD         ((u8 *)0xC01EF800)                /* pad state (pad_hooks.S) */
-#define PAD_MAGIC   0x5242445au
+#define PAD_MAGIC   0x5243445au
 enum { ST_MODE = 4, ST_TAG = 6, ST_NOTE = 16, ST_UNDO = 112, ST_TABLE = 128, ST_SHIFT = 483, ST_MLOCK = 484, ST_MLDONE = 485,
-       ST_BANK = 486 };
+       ST_BANK = 486, ST_STEP = 487, ST_STIME = 488 };
+#define TICK        (*(volatile u32 *)0x20006218)     /* HAL tick, ms (SysTick 0803d124 -> 0803e428) */
+#define SEL_TRACK   (*(volatile u8 *)0x200001a4)
+#define DISPLAY     (*(u8 *volatile *)0x200014a0)
 
 typedef u32 (*f_chord_flag)(u8 *seq, u32 track, u32 project);                 /* 0802d160 */
 typedef void (*f_ui)(u8 *ui, u32 what);                                       /* 0801f96c */
@@ -446,4 +449,88 @@ u32 pa_chord_flag(u8 *seq, u32 track, u32 project)
         if ((mode == track + 1 || mode == 5 + track) && ((f_arp_flag)0x0802b55d)(seq, track, project)) return 0;
     }
     return ((f_chord_flag)0x0802d161)(seq, track, project);
+}
+
+/* Shared pads play as stored (oct_shift is 0 in that layout), so the keyboard follows them: before a shared
+ * pad sounds on track t (1-3), if its notes are not all on the 37 keys shown (octave byte o: keys o*12+24 ..
+ * o*12+60), the track's octave moves the fewest steps (0-4, the panel's range) that shows them, else to the
+ * octave of the lowest note. As the stock octave buttons (080500d8 ids 5/6): setter 0802b22c, octave lights
+ * 5-9 (colour 8) and the screen (0801afe4), the last two only when that track is the one selected. */
+typedef void (*f_oct_set)(u8 *seq, u32 octave, u32 track, u32 project);        /* 0802b22c */
+typedef void (*f_led_set)(u8 *leds, u32 id, u32 on, u32 colour, u32 a, u32 b); /* 08053eb8 */
+typedef void (*f_leds_send)(u8 *leds);                                          /* 08054c2c */
+typedef void (*f_screen)(u8 *display);                                          /* 0801afe4 */
+
+static int oc_fits(int o, int lo, int hi)
+{
+    return o >= 0 && o <= 4 && o * 12 + 24 <= lo && hi <= o * 12 + 60;
+}
+
+void oc_follow(u32 track, const u8 *notes)
+{
+    if (*(u32 *)PAD != PAD_MAGIC || PAD[ST_TABLE + 4] != 1 || PAD[ST_MODE] - 2u > 2 || track - 1 > 2) return;
+    int lo = 128, hi = -1;
+    for (u32 i = 0; i < 5; i++) {
+        if (notes[i] > 127) continue;
+        if (notes[i] < lo) lo = notes[i];
+        if (notes[i] > hi) hi = notes[i];
+    }
+    if (hi < 0) return;
+    u8 *seq = SEQ;
+    u32 project = CUR_PROJECT;
+    int cur = seq[project * 0xfec + track * 0x16 + 0x1752] & 7;
+    if (cur * 12 + 24 <= lo && hi <= cur * 12 + 60) return;
+    int best = -1;
+    for (int d = 1; d <= 4 && best < 0; d++) {
+        if (oc_fits(cur - d, lo, hi)) best = cur - d;
+        else if (oc_fits(cur + d, lo, hi)) best = cur + d;
+    }
+    if (best < 0) {
+        best = (lo - 24) / 12;
+        if (lo < 24) best = 0;
+        if (best > 4) best = 4;
+    }
+    if (best == cur) return;
+    ((f_oct_set)0x0802b22d)(seq, (u32)best, track, project);
+    if (SEL_TRACK != track) return;
+    u8 *leds = LEDS_PTR;
+    for (u32 id = 5; id < 10; id++) ((f_led_set)0x08053eb9)(leds, id, 0, 8, 0, 0);
+    ((f_led_set)0x08053eb9)(leds, (u32)best + 5, 1, 8, 0, 0);
+    ((f_leds_send)0x08054c2d)(leds);
+    ((f_screen)0x0801afe5)(DISPLAY);
+}
+
+/* Step play (key_down in pad_hooks.S, Shift + key with chord pads on; the chord table is loaded). Not in
+ * the shared layout or with step play off: 0x100 (the key stays stock). Else the key is taken: the next
+ * shared pad with notes from the current step (pad 1 again after 2 s without a step press), 0-63, and
+ * the step after it becomes current; 0xff when no pad has notes. */
+u32 sp_next(u32 slot)
+{
+    (void)slot;
+    u8 *b = PAD + ST_TABLE;
+    if (b[4] != 1 || b[5] != 1) return 0x100;
+    u32 now = TICK, *last = (u32 *)(PAD + ST_STIME);
+    if (now - *last > 2000) PAD[ST_STEP] = 0;
+    *last = now;
+    u32 q = PAD[ST_STEP] & 63;
+    for (u32 k = 0; k < 64; k++, q = (q + 1) & 63) {
+        const u8 *pad = b + 8 + q * 3;
+        if (pad[0] < 128 || pad[1] < 128 || pad[2] < 128) {
+            PAD[ST_STEP] = (u8)((q + 1) & 63);
+            return q;
+        }
+    }
+    return 0xff;
+}
+
+/* Shift + 48 in chord pad mode, shared layout: step play on/off for the project (table byte 5; Save Project
+ * keeps it), from pad 1. */
+void sp_toggle(void)
+{
+    u8 *b = PAD + ST_TABLE;
+    b[5] = b[5] == 1 ? 0xFF : 1;
+    PAD[ST_STEP] = 0;
+    *(u32 *)(PAD + ST_STIME) = TICK;
+    *ns_put(ns_put(TEXT, "Step play "), b[5] == 1 ? "on\nShift+key = next" : "off") = 0;
+    ns_popup();
 }

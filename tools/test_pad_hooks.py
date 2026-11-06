@@ -28,6 +28,8 @@ KEY_LED, LED_SET, SEL_TRACK, TRACK_COLOURS = 0x08034AB4, 0x08053EB8, 0x200001A4,
 REC_NOTE, REC_END, REC_X, RECORDING, REC_ARMED = 0x0802A244, 0x08029E78, 0x20003D9D, 0x20003D91, 0x20002D5B
 KEY_REC_CALL, STOCK_KEY_REC = 0x08015EE0, 0x080108A4
 STRIP_CALL, STRIP_STOCK, STRIP_SKIP = 0x080124DA, 0x080542DC, 0x08012358
+KEY_DOWN_CALL, KEY_UP_CALL, SEL_GET = 0x0801535E, 0x08015094, 0x0802AB0C   # step play: first call of key events 10 / 9
+SCREEN, DISPLAY_PTR, DISPLAY_OBJ, TICK, BUTTONS_PTR = 0x0801AFE4, 0x200014A0, 0x20052000, 0x20006218, 0x200014B8
 MIDI_IN, CHORD_FLAG_CALLS = 0x08018B84, (0x08038368, 0x080383B8)   # pads -> arp: stock MIDI-in note handler (stubbed)
 GLOBALS, PORT_PTR, PORT = 0x20000874, 0x20001800, 0x20003000
 SEQ_PTR, SEQ, CUR_PROJECT, CUR_PAT, MASKS, HELD = 0x20001498, 0x20020000, 0x20004DAD, 0x20004DA8, 0x20000004, 0x20004DDC
@@ -66,6 +68,8 @@ def run(path: Path) -> None:
     uc.mem_write(UI_PTR, UI_OBJ.to_bytes(4, "little"))          # screen: keys and pads show popups (note_show.c)
     uc.mem_write(POPUP_CTX_PTR, POPUP_CTX_VAL.to_bytes(4, "little"))
     uc.mem_write(LEDS_PTR, LEDS.to_bytes(4, "little"))
+    uc.mem_write(DISPLAY_PTR, DISPLAY_OBJ.to_bytes(4, "little"))
+    uc.mem_write(BUTTONS_PTR, BUTTONS.to_bytes(4, "little"))
     flash = bytearray(b"\xff" * 0x200000)
     sent: list[bytes] = []
     stock: list[tuple[str, int]] = []
@@ -79,6 +83,8 @@ def run(path: Path) -> None:
     next_slot = [10]
     strips: list[tuple] = []
     arp_in: list[tuple] = []
+    sel_get: list[int] = []
+    screens: list[int] = []
 
     def hook(m: Uc, address: int, _size: int, _data: object) -> None:
         r = m.reg_read
@@ -161,6 +167,15 @@ def run(path: Path) -> None:
         elif address == MIDI_IN:
             assert r(UC_ARM_REG_R0) == 0 and r(UC_ARM_REG_SP) % 8 == 0
             arp_in.append((bytes(m.mem_read(r(UC_ARM_REG_R1), 3)), r(UC_ARM_REG_R2)))
+            ret()
+        elif address == SEL_GET:
+            assert r(UC_ARM_REG_R0) == SEQ and r(UC_ARM_REG_LR) == STOP | 1, "stock key event call gets its args"
+            sel_get.append(r(UC_ARM_REG_SP))
+            m.reg_write(UC_ARM_REG_R0, 1)
+            ret()
+        elif address == SCREEN:
+            assert r(UC_ARM_REG_R0) == DISPLAY_OBJ and r(UC_ARM_REG_SP) % 8 == 0
+            screens.append(r(UC_ARM_REG_R0))
             ret()
         elif address == STOP:
             m.emu_stop()
@@ -688,6 +703,8 @@ def run(path: Path) -> None:
     assert tbl(4, 1) == b"\xff" and tbl(8 + 1 * 5, 5) == bytes((60, 64, 67, 255, 255))
     assert tbl(8 + 16 * 5, 5) == bytes((56, 255, 255, 255, 255)) and tbl(8 + 47 * 5, 5) == bytes((87, 255, 255, 255, 255))
     assert tbl(248, 8) == b"\xff" * 8
+    track_key(1, 4, 1, project=sp_proj)                          # octave 0 again (the shared pads moved it)
+    track_key(2, 4, 1, project=sp_proj)
     assert played(1) == [40], "track 2 = old page 1"
     combo(T3_SEQ, T3_ARP)
     assert played(1) == [56], "track 3 = old page 2"
@@ -700,8 +717,8 @@ def run(path: Path) -> None:
     assert tbl(8 + 48 * 3, 256 - 8 - 48 * 3) == b"\xff" * (256 - 8 - 48 * 3), "page 4 empty after the round trip"
     assert played(17 - 16) == [40], "back on page 1"
     stock.clear()
-    held(SHIFT, True); tap(PAGE1 + 2); held(SHIFT, False)        # Shift + another page button: stock
-    assert ("press", PAGE1 + 2) in stock
+    held(SHIFT, True); tap(PAGE1 + 1); held(SHIFT, False)        # Shift + 32: stock (48 is step play, 64 the layout)
+    assert ("press", PAGE1 + 1) in stock
     # step lights follow the page: page 4 holds nothing now -> all 16 white (empty)
     uc.mem_write(SEL_TRACK, b"\2")
     tap(PAGE4)
@@ -712,6 +729,8 @@ def run(path: Path) -> None:
     assert uc.mem_read(STATE + 4, 1) == b"\0"
     stock.clear(); tap(PAGE1 + 1)
     assert ("press", PAGE1 + 1) in stock
+    shared_build12(uc, start, target, event, held, tap, combo, glob, track_key, keys, flash, sent, strips, sel_get,
+                   screens, leds, flushes, popups, stock, played, tbl)
     track_key(1, 0, 1, project=proj)
     combo(T2_SEQ, T2_ARP)
     stock.clear(); sent.clear()
@@ -723,7 +742,110 @@ def run(path: Path) -> None:
     print("PASS: stock passthrough when off, drum pads (Drum+Seq), Seq alone stock, chord pads (Seq+Arp) "
           "switching drum pads off and back, scale chords (major, minor, Chromatic->major, octave, 7ths), "
           "capture sorted/dedup/5 max/other tracks ignored, Erase+step, Shift+Exit undo/redo of capture and erase (else stock), note offs after mode off, track 3 channel, "
-          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), mod strip lock (Shift + mod strip toggles, pitch bend untouched), chord pads feed the arp in Arp mode (no MIDI, no record, release after mode change, Chord mode ignored for that track only), shared 64 pads (page buttons pick 16, all chord tracks, capture lowest 3, Erase, Shift+64 converts both ways, step lights per page, stock outside), channel OFF, stack alignment")
+          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), mod strip lock (Shift + mod strip toggles, pitch bend untouched), chord pads feed the arp in Arp mode (no MIDI, no record, release after mode change, Chord mode ignored for that track only), shared 64 pads (page buttons pick 16, all chord tracks, capture lowest 3, Erase, Shift+64 converts both ways, step lights per page, stock outside), shared pads at fixed pitch with the octave following them (fewest octaves, lights and screen for the selected track only), step play (Shift+48 on/off, Shift+key plays the next pad with notes, empty pads skipped, release on key up, wrap, restart after 2 s, no capture, page follows, plain keys and other modes stock), channel OFF, stack alignment")
+
+
+def shared_build12(uc, start, target, event, held, tap, combo, glob, track_key, keys, flash, sent, strips, sel_get,
+                   screens, leds, flushes, popups, stock, played, tbl) -> None:
+    """build 12: shared pads at fixed pitch, the octave follows; step play with Shift + key."""
+    PAGE1 = 0x3F
+    pj = 10
+    track_key(1, 4, 1, project=pj)                               # E major, octave byte 3: keys 60-96
+    glob(76, 1)                                                  # track 2 on channel 2
+    pads = {0: [64], 2: [68], 3: [71, 75, 78], 5: [56], 17: [59], 40: [90]}
+    blk = bytearray(b"CHD1\x01\xff\xff\xff" + b"\xff" * 192)
+    for q, ns in pads.items():
+        blk[8 + q * 3:8 + q * 3 + len(ns)] = bytes(ns)
+    blk += b"\xff" * (256 - len(blk))
+    at = pj * 0x20000 + 0x1FEF0
+    flash[at:at + 256] = blk
+    combo(T2_SEQ, T2_ARP)
+    assert uc.mem_read(STATE + 4, 1) == b"\2"
+    octave = lambda: uc.mem_read(SEQ + pj * 0xFEC + 1 * 0x16 + 0x1752, 1)[0] & 7
+    uc.mem_write(SEL_TRACK, b"\1")
+    # fixed pitch + octave follow
+    leds.clear(); screens.clear(); flushes.clear()
+    assert played(1) == [64] and octave() == 3, "on the keys: nothing moves"
+    assert not screens
+    assert played(6) == [56] and octave() == 2, "G#3 below the keys: one octave down (48-84)"
+    assert (7, 1, 8) in leds and all((i, 0, 8) in leds for i in range(5, 10)) and screens, (leds, screens)
+    assert played(1) == [64] and octave() == 2, "64 is on 48-84: stays"
+    assert played(4) == [71, 75, 78] and octave() == 2, "stored notes, not moved by the octave"
+    tap(PAGE1 + 2)
+    leds.clear(); screens.clear()
+    assert played(9) == [90] and octave() == 3, "90 above 84: up one"
+    tap(PAGE1)
+    uc.mem_write(SEL_TRACK, b"\2")                                # another track selected: octave moves, no lights
+    leds.clear(); screens.clear()
+    assert played(6) == [56] and octave() == 2 and not screens and not [l for l in leds if 5 <= l[0] <= 9]
+    uc.mem_write(SEL_TRACK, b"\1")
+    # step play off: Shift + key stays stock
+    frame = 0x200FF000
+
+    def key(kind: str, slot: int) -> tuple[list[bytes], str]:
+        sent.clear(); strips.clear(); sel_get.clear()
+        uc.mem_write(frame + 0x6A, bytes((slot,)))
+        start(target(KEY_DOWN_CALL if kind == "down" else KEY_UP_CALL), {UC_ARM_REG_R0: SEQ})
+        how = "skip" if strips else "stock" if sel_get else "?"
+        if strips:
+            assert strips[-1][2] == frame, "event loop frame restored"
+        if sel_get:
+            assert sel_get[-1] == frame
+        return list(sent), how
+    notes_on = lambda msgs: [m[1] for m in msgs if m[0] == 0x91 and m[2]]
+    notes_off = lambda msgs: [m[1] for m in msgs if m[0] == 0x81 or (m[0] == 0x91 and not m[2])]
+    event("press", SHIFT)
+    assert key("down", 5) == ([], "stock") and key("up", 5) == ([], "stock"), "step play off"
+    # Shift + 48 turns it on (shared layout only), popup
+    stock.clear(); popups.clear()
+    held(SHIFT, True); tap(PAGE1 + 2)
+    assert tbl(5, 1) == b"\x01" and popups[-1] == "Step play on\nShift+key = next" and not [x for x in stock if x[1] == PAGE1 + 2]
+    uc.mem_write(TICK, (1000).to_bytes(4, "little"))
+    seq = []
+    for i in range(7):
+        on_, how = key("down", 7)
+        assert how == "skip", how
+        off_, how2 = key("up", 7)
+        assert how2 == "skip" and notes_off(off_) == notes_on(on_), (on_, off_)
+        seq.append(notes_on(on_))
+    assert seq == [[64], [68], [71, 75, 78], [56], [59], [90], [64]], seq
+    assert uc.mem_read(STATE + 486, 1) == b"\0", "page follows the step (back on page 1)"
+    # page follows mid-way, capture never happens with keys held on the track
+    keys((60, 1), (62, 1))
+    for i in range(4):
+        key("down", 9); key("up", 9)
+    keys()
+    assert uc.mem_read(STATE + 486, 1) == b"\1", "pad 18 is on page 2"
+    assert tbl(8, 3) == bytes((64, 255, 255)) and tbl(8 + 17 * 3, 3) == bytes((59, 255, 255)), "no capture"
+    # a second key before the first is let go: the first stops first
+    on1, _ = key("down", 3)
+    on2, _ = key("down", 4)
+    assert notes_on(on1) == [90] and notes_off(on2) == [90] and notes_on(on2) == [64], (on1, on2)
+    assert key("up", 3) == ([], "stock"), "the first key's release is stock now"
+    assert notes_off(key("up", 4)[0]) == [64]
+    # 2 s without a step press: from pad 1 again
+    key("down", 2); key("up", 2)                                 # pad 3 (68)
+    uc.mem_write(TICK, (1000 + 5000).to_bytes(4, "little"))
+    assert notes_on(key("down", 2)[0]) == [64], "restart after a pause"
+    key("up", 2)
+    # without Shift: stock
+    event("release", SHIFT)
+    assert key("down", 6) == ([], "stock") and key("up", 6) == ([], "stock")
+    # Shift + 48 again: off
+    held(SHIFT, True); tap(PAGE1 + 2); held(SHIFT, False)
+    assert tbl(5, 1) == b"\xff" and popups[-1] == "Step play off"
+    event("press", SHIFT)
+    assert key("down", 7) == ([], "stock")
+    event("release", SHIFT)
+    # Save Project keeps byte 5
+    held(SHIFT, True); tap(PAGE1 + 2); held(SHIFT, False)
+    event("press", SHIFT)
+    combo(T2_SEQ, T2_ARP)                                        # pads off: Shift + key stock
+    assert key("down", 7) == ([], "stock")
+    event("release", SHIFT)
+    combo(T2_SEQ, T2_ARP)
+    track_key(1, 4, 1, project=pj)
+    combo(T2_SEQ, T2_ARP)
 
 
 def page_bass(chords: list[tuple[int, list[int]]], length: int) -> dict[str, list] | None:

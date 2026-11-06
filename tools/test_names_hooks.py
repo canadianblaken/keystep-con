@@ -245,7 +245,7 @@ def chord_pads(path: Path) -> None:
     emu = link.emu
     block = lambda proj: bytes(emu.nor[(proj - 1) * 0x20000 + 0x1FEF0:(proj - 1) * 0x20000 + 0x1FFF0])
     pad_state = 0xC01EF800
-    emu.uc.mem_write(pad_state, b"ZDBR")
+    emu.uc.mem_write(pad_state, b"ZDCR")
     emu.uc.mem_write(pad_state + 6, b"\x02")                  # RAM copy holds project 3
     emu.uc.mem_write(pad_state + 112, b"\x01")                # with an undo pending
     pads = [[60, 64, 67], [], [62, 65, 69, 72, 74]]
@@ -275,15 +275,19 @@ def chord_pads(path: Path) -> None:
     b = block(5)
     want = bytes(sum(([*p] + [0xFF] * (3 - len(p)) for p in shared), [])) + b"\xff" * 3 * 24
     assert b[:5] == b"CHD1\x01" and b[5:8] == b"\xff" * 3 and b[8:200] == want and b[200:] == b"\xff" * 56, b[:16].hex()
+    at5 = 4 * 0x20000 + 0x1FEF0                                 # step play on (build 12, byte 5), as Save Project would
+    emu.nor[at5 + 5] = 1
+    link.set_shared_pads(5, shared)
+    assert block(5)[4:6] == b"\x01\x01", "a pad write keeps step play"
     link.set_chord_pads(5, 2, [[48, 55]])
-    assert block(5)[4] == 0xFF and block(5)[8:10] == bytes((48, 55))
+    assert block(5)[4] == 0xFF and block(5)[5] == 1 and block(5)[8:10] == bytes((48, 55))
     before = bytes(emu.nor)
     link.send(frame(0x0C, 5, 0x7D, 1, 0x78, 8, 48, *[60] * 48))   # past page 4
     link.send(frame(0x0C, 5, 0x7D, 1, 0x78, 5, 80, *[60] * 80))   # page with a track's length
     assert bytes(emu.nor) == before and not emu.errors, emu.errors
     print("PASS: chord pad write via SysEx (block layout, empty-block init, per-track update, RAM copy "
           "dropped, other projects untouched, survives name write + stock commit, guards; shared pages "
-          "set the layout, a track write sets it back)")
+          "set the layout, a track write sets it back, step play byte kept)")
 
 
 if __name__ == "__main__":
