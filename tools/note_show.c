@@ -35,9 +35,9 @@ typedef unsigned int u32;
 #define LEDS_PTR    (*(u8 *volatile *)0x20001490)
 #define TRACK_COLOURS ((volatile u8 *)0x20000058)
 #define PAD         ((u8 *)0xC01EF800)                /* pad state (pad_hooks.S) */
-#define PAD_MAGIC   0x5243445au
+#define PAD_MAGIC   0x5343445au
 enum { ST_MODE = 4, ST_TAG = 6, ST_NOTE = 16, ST_UNDO = 112, ST_TABLE = 128, ST_SHIFT = 483, ST_MLOCK = 484, ST_MLDONE = 485,
-       ST_BANK = 486, ST_STEP = 487, ST_STIME = 488 };
+       ST_BANK = 486, ST_STEP = 487, ST_STIME = 488, ST_POFF = 496, ST_LOCT = 500 };
 #define TICK        (*(volatile u32 *)0x20006218)     /* HAL tick, 0.1 ms (SysTick 0803d124 -> 0803e428; stock divides by 10) */
 #define TICKS_2S    20000
 #define SEL_TRACK   (*(volatile u8 *)0x200001a4)
@@ -493,12 +493,30 @@ void oc_follow(u32 track, const u8 *notes)
     }
     if (best == cur) return;
     ((f_oct_set)0x0802b22d)(seq, (u32)best, track, project);
+    PAD[ST_LOCT + track - 1] = (u8)best;   /* our own move: not an octave button press (po_shift) */
     if (SEL_TRACK != track) return;
     u8 *leds = LEDS_PTR;
     for (u32 id = 5; id < 10; id++) ((f_led_set)0x08053eb9)(leds, id, 0, 8, 0, 0);
     ((f_led_set)0x08053eb9)(leds, (u32)best + 5, 1, 8, 0, 0);
     ((f_leds_send)0x08054c2d)(leds);
     ((f_screen)0x0801afe5)(DISPLAY);
+}
+
+/* Shared pads move with the octave buttons (oct_shift in pad_hooks.S, every pad press of track 1-3 in
+ * the shared layout): the keyboard octave changing since the last pad press, other than by oc_follow,
+ * was the octave buttons, and adds to the track's pad offset. Returns the offset in semitones. */
+int po_shift(u32 track)
+{
+    if (track - 1 > 2) return 0;
+    int cur = SEQ[CUR_PROJECT * 0xfec + track * 0x16 + 0x1752] & 7;
+    u8 *last = PAD + ST_LOCT + track - 1;
+    signed char *off = (signed char *)PAD + ST_POFF + track - 1;
+    if (*last <= 7) {
+        int o = *off + cur - *last;
+        *off = (signed char)(o < -4 ? -4 : o > 4 ? 4 : o);
+    }
+    *last = (u8)cur;
+    return *off * 12;
 }
 
 /* Step play (key_down in pad_hooks.S, Shift + key with chord pads on; the chord table is loaded). Not in

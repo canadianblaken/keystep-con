@@ -742,7 +742,7 @@ def run(path: Path) -> None:
     print("PASS: stock passthrough when off, drum pads (Drum+Seq), Seq alone stock, chord pads (Seq+Arp) "
           "switching drum pads off and back, scale chords (major, minor, Chromatic->major, octave, 7ths), "
           "capture sorted/dedup/5 max/other tracks ignored, Erase+step, Shift+Exit undo/redo of capture and erase (else stock), note offs after mode off, track 3 channel, "
-          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), mod strip lock (Shift + mod strip toggles, pitch bend untouched), chord pads feed the arp in Arp mode (no MIDI, no record, release after mode change, Chord mode ignored for that track only), shared 64 pads (page buttons pick 16, all chord tracks, capture lowest 3, Erase, Shift+64 converts both ways, step lights per page, stock outside), shared pads at fixed pitch with the octave following them (fewest octaves, lights and screen for the selected track only), step play (Shift+48 on/off, Shift+key plays the next pad with notes, empty pads skipped, release on key up, wrap, restart after 2 s, no capture, page follows, plain keys and other modes stock), channel OFF, stack alignment")
+          "Save Project stages chords and keeps the name, root chords (Seq+Mute toggle, silent root keys on its track only, all 16 step chords in C major from D, root outside the scale, minor, exclusive with pads), per-project load from flash, recording (selected track only, chords and drum lanes, note length at release, armed+playing, refused notes, root keys not recorded), key lights (drum on track 1 as drums, chords in the track colour, off on release, selected track only), screen names notes and chords (keys, Chord mode, chord and root-chord pads, root keys, drum lanes; not menus), step lights show the pads (kept/empty/held/matching the keys, stock lights restored), mod strip lock (Shift + mod strip toggles, pitch bend untouched), chord pads feed the arp in Arp mode (no MIDI, no record, release after mode change, Chord mode ignored for that track only), shared 64 pads (page buttons pick 16, all chord tracks, capture lowest 3, Erase, Shift+64 converts both ways, step lights per page, stock outside), shared pads at fixed pitch with the octave following them (fewest octaves, lights and screen for the selected track only), the octave buttons move the shared pads (the follow's own moves excluded), step play (Shift+48 on/off, Shift+key plays the next pad with notes, empty pads skipped, release on key up, wrap, restart after 2 s, no capture, page follows, plain keys and other modes stock), channel OFF, stack alignment")
 
 
 def shared_build12(uc, start, target, event, held, tap, combo, glob, track_key, keys, flash, sent, strips, sel_get,
@@ -775,6 +775,19 @@ def shared_build12(uc, start, target, event, held, tap, combo, glob, track_key, 
     leds.clear(); screens.clear()
     assert played(9) == [90] and octave() == 3, "90 above 84: up one"
     tap(PAGE1)
+    # build 14: the octave buttons move the shared pads (an octave change the follow did not make)
+    ob = SEQ + pj * 0xFEC + 1 * 0x16 + 0x1752
+    oct_set = lambda v: uc.mem_write(ob, bytes(((uc.mem_read(ob, 1)[0] & ~7) | v,)))
+    oct_set(4)                                                   # octave up
+    assert played(1) == [76] and octave() == 4, "up one octave: 64 -> 76, on the keys (72-108)"
+    assert played(6) == [68] and octave() == 3, "56 + 12 below the keys: the follow moves down, offset stays"
+    assert played(1) == [76] and octave() == 3, "still one octave up after the follow's own move"
+    oct_set(2)                                                   # octave down
+    assert played(1) == [64] and octave() == 2, "back down: as stored"
+    oct_set(0)
+    assert played(1) == [40] and octave() == 0, "two down: 64 -> 40 (keys 24-60)"
+    oct_set(2)
+    assert played(1) == [64] and octave() == 2
     uc.mem_write(SEL_TRACK, b"\2")                                # another track selected: octave moves, no lights
     leds.clear(); screens.clear()
     assert played(6) == [56] and octave() == 2 and not screens and not [l for l in leds if 5 <= l[0] <= 9]

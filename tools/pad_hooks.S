@@ -109,7 +109,7 @@
 @ state in external RAM, in a stretch no stock code references (below the
 @ save staging buffer at 0xC01F0000); not cleared at boot, so it carries a magic
 .equ PAD_STATE,     0xC01EF800
-.equ PAD_MAGIC,     0x5243445a      @ "ZDCR" (v12 layout: + step play)
+.equ PAD_MAGIC,     0x5343445a      @ "ZDCS" (v14 layout: + pad octave offsets)
 .equ ST_MODE,       4               @ 0 off, 1 drum pads, 2-4 chord pads for track 2-4,
                                     @ 5-8 root chords for track 1-4
 .equ CT_MODE,       5
@@ -133,6 +133,8 @@
 .equ ST_SKEY,       492             @ step play: key slot 0-36 sounding a pad, 0xff none
 .equ ST_SPAD,       493             @ step play: the step button 0-15 its notes are kept under
 .equ ST_NOCAP,      494             @ 1 while step play presses a pad: never capture held keys
+.equ ST_POFF,       496             @ shared pads: 3 x s8 octave offset per track 2-4 (octave buttons, po_shift)
+.equ ST_LOCT,       500             @ shared pads: 3 x keyboard octave last seen per track 2-4, 0xff none
 .equ ST_TABLE,      128             @ 256: copy of the project's chord block (flash layout):
                                     @ magic, layout byte, step play byte (1 on), 2 spare, then track 2-4 x 16 pads x 5 notes,
                                     @ or (layout 1) 64 shared pads x 3 notes; 0xff unused
@@ -163,10 +165,12 @@ pad_state:
     strb    r0, [r7, #ST_STEP]
     strb    r0, [r7, #ST_NOCAP]
     str     r0, [r7, #ST_STIME]
+    str     r0, [r7, #ST_POFF]
     movs    r0, #0xff
     strb    r0, [r7, #ST_TAG]
     strb    r0, [r7, #ST_BT]
     strb    r0, [r7, #ST_SKEY]
+    str     r0, [r7, #ST_LOCT]
     movs    r2, #0
 2:  adds    r3, r7, r2
     strb    r0, [r3, #ST_NOTE]
@@ -199,6 +203,9 @@ chords_load:
     movs    r0, #0
     strb    r0, [r7, #ST_UNDO]      @ another project: nothing to undo
     strb    r0, [r7, #ST_STEP]      @ and step play starts from pad 1
+    str     r0, [r7, #ST_POFF]      @ and the shared pads play as stored
+    mvn     r0, #0
+    str     r0, [r7, #ST_LOCT]
     ldr     r0, =FLASH_CTX
     ldr     r1, =CHORD_FLASH
     add     r1, r1, r4, lsl #17
@@ -271,16 +278,19 @@ undo_keep:
 .size undo_keep, .-undo_keep
 
 @ r0 = track 0-3 -> r0 = (keyboard octave - octave 0) * 12: stored pad chords are kept as played
-@ at octave 0 (the default) and move with the octave buttons; shared pads play as stored (0; the
-@ octave follows them instead, oc_follow). Uses r0-r3 only.
+@ at octave 0 (the default) and move with the octave buttons; shared pads play as stored plus the
+@ octaves the buttons moved since (po_shift; the keyboard octave follows them, oc_follow).
+@ Uses r0-r3 only (r12 too in the shared layout).
 .type oct_shift,%function
 oct_shift:
     ldr     r1, =PAD_STATE
     ldrb    r1, [r1, #ST_TABLE + 4]
     cmp     r1, #LAYOUT_SHARED
-    itt     eq
-    moveq   r0, #0
-    bxeq    lr
+    bne     1f
+    push    {r4, lr}
+    bl      po_shift
+    pop     {r4, pc}
+1:
     ldr     r1, =SEQ_PTR
     ldr     r1, [r1]
     ldr     r2, =CUR_PROJECT
